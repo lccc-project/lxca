@@ -100,7 +100,7 @@ delegate_to_debug!(for<T> *const T, for<T> *mut T, for<T> PhantomData<T>);
 delegate_to_debug!(
     u128, u64, u32, u16, u8, i128, i64, i32, i16, i8, usize, isize, f32, f64, bool
 );
-delegate_to_debug!(Uuid, str, String);
+delegate_to_debug!(Uuid, str);
 use indexmap::{IndexMap, IndexSet};
 use uuid::Uuid;
 

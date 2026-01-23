@@ -7,8 +7,14 @@ use crate::{delegate_to_debug, ir::constant::ConstantPoolEntry};
 
 use super::constant::{BorrowConstant, ConstantAs};
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Hash, PartialEq, Eq)]
 pub struct SymbolDef(String);
+
+impl core::fmt::Debug for SymbolDef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
 
 impl SymbolDef {
     pub const fn new(st: String) -> SymbolDef {
@@ -45,8 +51,14 @@ impl PartialEq<&Symbol> for SymbolDef {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Hash, PartialEq, Eq)]
 pub struct Symbol(str);
+
+impl core::fmt::Debug for Symbol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
 
 impl Symbol {
     pub const fn new(st: &str) -> &Symbol {

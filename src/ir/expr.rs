@@ -194,12 +194,7 @@ pub enum ExprBody<'ir> {
     Interned(Constant<'ir, Expr<'ir>>),
     Const(Value<'ir>),
     UnaryOp(UnaryOp, OverflowBehaviour, BoxOrConstant<'ir, Expr<'ir>>),
-    BinaryOp(
-        BinaryOp,
-        OverflowBehaviour,
-        BoxOrConstant<'ir, Expr<'ir>>,
-        BoxOrConstant<'ir, Expr<'ir>>,
-    ),
+    BinaryOp(BinaryExpr<'ir>),
     ReadField(
         BoxOrConstant<'ir, Expr<'ir>>,
         Constant<'ir, Type<'ir>>,
@@ -247,6 +242,20 @@ impl<'ir, 'a> ExprBuilder<'ir, 'a> {
         self
     }
 
+    pub fn ty(&mut self, ty: Type<'ir>) -> &mut Self {
+        self.ty = Some(ty);
+        self
+    }
+
+    pub fn ty_with<F: FnOnce(&mut TypeBuilder<'ir, '_>) -> Type<'ir>>(
+        &mut self,
+        f: F,
+    ) -> &mut Self {
+        let ty = f(&mut TypeBuilder::new(self.pool));
+        self.ty = Some(ty);
+        self
+    }
+
     fn finish(&mut self, body: ExprBody<'ir>) -> Expr<'ir> {
         let ty = self.ty.take().expect("Type must be set");
 
@@ -279,6 +288,15 @@ impl<'ir, 'a> ExprBuilder<'ir, 'a> {
     pub fn const_int<I: Internalizable<'ir, u128>>(&mut self, ity: IntType, val: I) -> Expr<'ir> {
         self.value(move |builder| builder.with_ty(|builder| builder.int_type(ity)).int(val))
     }
+
+    pub fn binop<F: FnOnce(&mut BinaryOpBuilder<'ir, '_>) -> BinaryExpr<'ir>>(
+        &mut self,
+        f: F,
+    ) -> Expr<'ir> {
+        let binexpr = f(&mut BinaryOpBuilder::new(self.pool));
+
+        self.finish(ExprBody::BinaryOp(binexpr))
+    }
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -290,7 +308,7 @@ pub enum UnaryOp {
 
 delegate_to_debug!(UnaryOp);
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub enum BinaryOp {
     Add,
     Sub,
@@ -301,7 +319,75 @@ pub enum BinaryOp {
 
 delegate_to_debug!(BinaryOp);
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
+pub struct BinaryExpr<'ir>(
+    pub BinaryOp,
+    pub OverflowBehaviour,
+    pub BoxOrConstant<'ir, Expr<'ir>>,
+    pub BoxOrConstant<'ir, Expr<'ir>>,
+);
+
+pub struct BinaryOpBuilder<'ir, 'a> {
+    pool: &'a mut ConstantPool<'ir>,
+    overflow: OverflowBehaviour,
+    left: Option<BoxOrConstant<'ir, Expr<'ir>>>,
+    right: Option<BoxOrConstant<'ir, Expr<'ir>>>,
+}
+
+impl<'ir, 'a> BinaryOpBuilder<'ir, 'a> {
+    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>) -> Self {
+        Self {
+            pool,
+            overflow: OverflowBehaviour::Wrap,
+            left: None,
+            right: None,
+        }
+    }
+
+    pub fn left<E: Internalizable<'ir, Expr<'ir>>>(&mut self, left: E) -> &mut Self {
+        let left = self.pool.intern(left);
+        self.left = Some(BoxOrConstant::Interned(left));
+        self
+    }
+
+    pub fn right<E: Internalizable<'ir, Expr<'ir>>>(&mut self, right: E) -> &mut Self {
+        let right = self.pool.intern(right);
+        self.right = Some(BoxOrConstant::Interned(right));
+        self
+    }
+
+    pub fn left_with<F: for<'b> FnOnce(&mut ExprBuilder<'ir, 'b>) -> Expr<'ir>>(
+        &mut self,
+        f: F,
+    ) -> &mut Self {
+        let left = f(&mut ExprBuilder::new(self.pool));
+        self.left = Some(BoxOrConstant::Boxed(Box::new(left)));
+        self
+    }
+
+    pub fn right_with<F: for<'b> FnOnce(&mut ExprBuilder<'ir, 'b>) -> Expr<'ir>>(
+        &mut self,
+        f: F,
+    ) -> &mut Self {
+        let right = f(&mut ExprBuilder::new(self.pool));
+        self.right = Some(BoxOrConstant::Boxed(Box::new(right)));
+        self
+    }
+
+    pub fn overflow(&mut self, behaviour: OverflowBehaviour) -> &mut Self {
+        self.overflow = behaviour;
+        self
+    }
+
+    pub fn finish(&mut self, op: BinaryOp) -> BinaryExpr<'ir> {
+        let left = self.left.take().expect("Left Expression must be set");
+        let right = self.right.take().expect("Right Expression must be set");
+
+        BinaryExpr(op, self.overflow, left, right)
+    }
+}
+
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub enum OverflowBehaviour {
     Wrap,
     Unchecked,

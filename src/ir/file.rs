@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+use std::{cmp::Ordering, marker::PhantomData};
 
 use lxca_derive::DebugWithConstants;
 
@@ -8,22 +8,34 @@ use crate::{
     fmt_helpers::WithConstants,
     ir::{
         decls::{DeclBuilder, Declaration},
-        metadata::{Metadata, MetadataBuilder, MetadataFlags, MetadataListBuilder},
+        metadata::{Metadata, MetadataBuilder},
         types::{Signature, SignatureBuilder, TypeBuilder},
     },
 };
 
 use super::{
     PhantomIrMarker,
-    constant::{BorrowConstant, Constant, ConstantPool, ConstantPoolEntry, Internalizable},
+    constant::{BorrowConstant, Constant, ConstantPool, Internalizable},
     metadata::MetadataList,
     types::Type,
 };
 
-#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Version {
     pub major: u16,
     pub minor: u16,
+}
+
+impl core::fmt::Debug for Version {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("{}.{}", self.major, self.minor))
+    }
+}
+
+impl core::fmt::Display for Version {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("{}.{}", self.major, self.minor))
+    }
 }
 
 impl<C> Decode<C> for Version {
@@ -70,9 +82,29 @@ impl<C> Decode<C> for Magic {
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OrderMarker;
 
+impl<C> Decode<C> for OrderMarker {
+    fn decode<R: crate::binfmt::dec::Reader>(
+        decoder: &mut crate::binfmt::dec::Decoder<R, C>,
+    ) -> crate::binfmt::dec::Result<Self> {
+        let a: [u8; 2] = u8::decode_array(decoder)?;
+
+        match a {
+            [0xAA, 0xBB] => decoder.config_mut().order = crate::binfmt::ByteOrder::Big,
+            [0xBB, 0xAA] => decoder.config_mut().order = crate::binfmt::ByteOrder::Little,
+            _ => {
+                return Err(crate::binfmt::dec::Error::FormatError(
+                    "Bad Byte Order Marker",
+                ));
+            }
+        }
+        Ok(OrderMarker)
+    }
+}
+
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct FileMetadata {
     pub magic: Magic,
+    pub order: OrderMarker,
     pub version: Version,
 }
 
@@ -168,6 +200,7 @@ impl<'ir> FileBuilder<'ir> {
             _marker: PhantomIrMarker(PhantomData),
             metadata: FileMetadata {
                 magic: Magic,
+                order: OrderMarker,
                 version: Version::CURRENT,
             },
             constant_pool,

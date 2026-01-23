@@ -171,13 +171,29 @@ macro_rules! def_constant_pool_enum {
             $(,)?
         }
     } => {
-        #[derive(Clone, PartialEq, Eq, lxca_derive::DebugWithConstants)]
+        #[derive(Clone, PartialEq, Eq)]
         #[non_exhaustive]
         $vis enum $name <$life> {
             $($variant ($ty),)*
 
             #[doc(hidden)]
             __NonExhaustive(PhantomIrMarker<$life>)
+        }
+
+        impl<$life> crate::fmt_helpers::DebugWithConstants<$life> for $name<$life> {
+            fn fmt(&self, f: &mut core::fmt::Formatter, cp: &ConstantPool<$life>) -> core::fmt::Result {
+                #[allow(non_snake_case)]
+                match self {
+                    $(Self:: $variant(__val) => {
+                        use core::fmt::Debug;
+                        f.write_str(core::stringify!($variant))?;
+                        f.write_str(" ")?;
+
+                        crate::fmt_helpers::WithConstants(__val, cp).fmt(f)
+                    })*
+                    Self::__NonExhaustive(_) => f.write_str("/*non exhaustive*/")
+                }
+            }
         }
 
         impl<'ir> core::hash::Hash for $name <'ir> {
