@@ -9,6 +9,7 @@ use crate::{
     ir::{
         decls::{DeclBuilder, Declaration},
         metadata::{Metadata, MetadataBuilder, MetadataFlags, MetadataListBuilder},
+        types::{Signature, SignatureBuilder, TypeBuilder},
     },
 };
 
@@ -126,6 +127,19 @@ impl<'ir> FileBuilder<'ir> {
             .expect("A finished FileBuilder cannot be used")
     }
 
+    pub fn build_constant<
+        C: BorrowConstant<'ir> + ?Sized,
+        R: Internalizable<'ir, C>,
+        F: for<'b> FnOnce(&mut ConstantBuilder<'ir, 'b>) -> R,
+    >(
+        &mut self,
+        f: F,
+    ) -> Constant<'ir, C> {
+        let val = f(&mut ConstantBuilder::new(self.constant_pool()));
+
+        self.constant_pool().intern(val)
+    }
+
     pub fn declare<F: for<'b> FnOnce(&mut DeclBuilder<'ir, 'b>) -> Declaration<'ir>>(
         &mut self,
         f: F,
@@ -164,5 +178,35 @@ impl<'ir> FileBuilder<'ir> {
             },
             decls: core::mem::take(&mut self.decls),
         }
+    }
+}
+
+pub struct ConstantBuilder<'ir, 'a> {
+    pool: &'a mut ConstantPool<'ir>,
+}
+
+impl<'ir, 'a> ConstantBuilder<'ir, 'a> {
+    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>) -> Self {
+        Self { pool }
+    }
+
+    pub fn type_with<
+        R: Internalizable<'ir, Type<'ir>>,
+        T: for<'b> FnOnce(&mut TypeBuilder<'ir, 'b>) -> R,
+    >(
+        &mut self,
+        f: T,
+    ) -> R {
+        f(&mut TypeBuilder::new(self.pool))
+    }
+
+    pub fn signature_with<
+        R: Internalizable<'ir, Signature<'ir>>,
+        S: for<'b> FnOnce(&mut SignatureBuilder<'ir, 'b>) -> R,
+    >(
+        &mut self,
+        f: S,
+    ) -> R {
+        f(&mut SignatureBuilder::new(self.pool))
     }
 }

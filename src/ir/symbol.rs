@@ -113,7 +113,16 @@ impl<'ir> From<Box<Symbol>> for ConstantPoolEntry<'ir> {
 
 #[macro_export]
 macro_rules! sym {
-    ($($i:tt)::+) => {
+    (# $ident:ident) => {
+        const { $crate::ir::symbol::Symbol::new($crate::macros::_core::concat!("#", $crate::macros::_core::stringify!($ident))) }
+    };
+    ($($i:ident)::+) => {
         const { $crate::ir::symbol::Symbol::new($crate::macros::_core::concat!("" $(, $crate::macros::_core::stringify!($i), )"::"+ ))}
     };
+    ($lit:literal) => {
+        const {
+            let _v: $crate::macros::_core::primitive::u128 = $lit; // Filter out string literals and negative numbers
+            const { $crate::ir::symbol::Symbol::new($crate::macros::_core::stringify!($lit)) }
+        }
+    }
 }

@@ -8,7 +8,7 @@ use crate::{
         constant::{BoxOrConstant, ConstantPool, Internalizable},
         metadata::MetadataBuilder,
         symbol::Symbol,
-        types::{IntType, Signature, TypeBuilder},
+        types::{IntType, Signature, SignatureBuilder, TypeBuilder},
     },
 };
 
@@ -84,9 +84,32 @@ impl<'ir, 'a> ValueBuilder<'ir, 'a> {
         self.finish(ValueBody::Null)
     }
 
+    pub fn global<S: Internalizable<'ir, Symbol>>(&mut self, sym: S) -> Value<'ir> {
+        let val = self.pool.intern(sym);
+        self.finish(ValueBody::GlobalAddr(val))
+    }
+
+    pub fn global_address<
+        R: Internalizable<'ir, Type<'ir>>,
+        F: for<'b> FnOnce(&mut TypeBuilder<'ir, 'b>) -> R,
+        S: Internalizable<'ir, Symbol>,
+    >(
+        &mut self,
+        ptr_builder: F,
+        sym: S,
+    ) -> Value<'ir> {
+        self.with_ty(move |ty| ty.pointer(move |ptr| ptr.finish_with(ptr_builder)))
+            .global(sym)
+    }
+
     pub fn int<I: Internalizable<'ir, u128>>(&mut self, i: I) -> Value<'ir> {
         let val = self.pool.intern(i);
         self.finish(ValueBody::Integer(val))
+    }
+
+    pub fn string<S: Internalizable<'ir, str>>(&mut self, s: S) -> Value<'ir> {
+        let val = self.pool.intern(s);
+        self.finish(ValueBody::StringLiteral(val))
     }
 }
 
@@ -354,12 +377,64 @@ impl<'ir, 'a> TermBuilder<'ir, 'a> {
         let expr = f(&mut ExprBuilder::new(self.pool));
         self.finish(TerminatorBody::Return(expr))
     }
+
+    pub fn call<F: for<'b> FnOnce(&mut CallBuilder<'ir, 'b>) -> CallTerm<'ir>>(
+        &mut self,
+        f: F,
+    ) -> Terminator<'ir> {
+        let term = f(&mut CallBuilder::new(self.pool));
+        self.finish(TerminatorBody::Call(term))
+    }
 }
 
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
 pub struct JumpTarget<'ir> {
-    pub target: Constant<'ir, str>,
-    pub args: Vec<Constant<'ir, str>>,
+    pub target: Constant<'ir, Symbol>,
+    pub metadata: MetadataList<'ir>,
+    pub args: Vec<Constant<'ir, Symbol>>,
+}
+
+pub struct JumpBuilder<'ir, 'a> {
+    pool: &'a mut ConstantPool<'ir>,
+    metadata: Vec<Metadata<'ir>>,
+    args: Vec<Constant<'ir, Symbol>>,
+}
+
+impl<'ir, 'a> JumpBuilder<'ir, 'a> {
+    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>) -> Self {
+        Self {
+            pool,
+            metadata: Vec::new(),
+            args: Vec::new(),
+        }
+    }
+
+    pub fn with_metadata<F: for<'b> FnOnce(&mut MetadataBuilder<'ir, 'b>) -> Metadata<'ir>>(
+        &mut self,
+        f: F,
+    ) -> &mut Self {
+        let meta = f(&mut MetadataBuilder::new(self.pool));
+        self.metadata.push(meta);
+        self
+    }
+
+    pub fn finish<S: Internalizable<'ir, Symbol>>(&mut self, targ: S) -> JumpTarget<'ir> {
+        let name = self.pool.intern(targ);
+        let metadata = MetadataList(core::mem::take(&mut self.metadata));
+        let args = core::mem::take(&mut self.args);
+
+        JumpTarget {
+            target: name,
+            metadata,
+            args,
+        }
+    }
+
+    pub fn arg<S: Internalizable<'ir, Symbol>>(&mut self, var: S) -> &mut Self {
+        let var = self.pool.intern(var);
+        self.args.push(var);
+        self
+    }
 }
 
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
@@ -374,4 +449,94 @@ pub struct FunctionCall<'ir> {
     pub sig: Signature<'ir>,
     pub call_metadata: MetadataList<'ir>,
     pub params: Vec<Expr<'ir>>,
+}
+
+pub struct CallBuilder<'ir, 'a> {
+    pool: &'a mut ConstantPool<'ir>,
+    metadata: Vec<Metadata<'ir>>,
+    params: Vec<Expr<'ir>>,
+    sig: Option<Signature<'ir>>,
+}
+
+impl<'ir, 'a> CallBuilder<'ir, 'a> {
+    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>) -> Self {
+        Self {
+            pool,
+            metadata: Vec::new(),
+            params: Vec::new(),
+            sig: None,
+        }
+    }
+
+    pub fn with_metadata<F: for<'b> FnOnce(&mut MetadataBuilder<'ir, 'b>) -> Metadata<'ir>>(
+        &mut self,
+        f: F,
+    ) -> &mut Self {
+        let meta = f(&mut MetadataBuilder::new(self.pool));
+        self.metadata.push(meta);
+        self
+    }
+
+    pub fn signature<S: Internalizable<'ir, Signature<'ir>>>(&mut self, sig: S) -> &mut Self {
+        let sig = self.pool.intern(sig);
+
+        self.sig = Some(Signature::Interned(sig));
+        self
+    }
+
+    pub fn signature_with<F: for<'b> FnOnce(&mut SignatureBuilder<'ir, 'b>) -> Signature<'ir>>(
+        &mut self,
+        f: F,
+    ) -> &mut Self {
+        let sig = f(&mut SignatureBuilder::new(self.pool));
+
+        self.sig = Some(sig);
+        self
+    }
+
+    pub fn arg<F: for<'b> FnOnce(&mut ExprBuilder<'ir, 'b>) -> Expr<'ir>>(
+        &mut self,
+        f: F,
+    ) -> &mut Self {
+        let arg = f(&mut ExprBuilder::new(self.pool));
+
+        self.params.push(arg);
+
+        self
+    }
+
+    pub fn finish_with_next<
+        E: for<'b> FnOnce(&mut ExprBuilder<'ir, 'b>) -> Expr<'ir>,
+        J: for<'b> FnOnce(&mut JumpBuilder<'ir, 'b>) -> JumpTarget<'ir>,
+    >(
+        &mut self,
+        jump: J,
+        target: E,
+    ) -> CallTerm<'ir> {
+        let jump = jump(&mut JumpBuilder::new(self.pool));
+        let call = self.finish(target);
+
+        CallTerm {
+            func: call,
+            next: jump,
+        }
+    }
+
+    pub fn finish<E: for<'b> FnOnce(&mut ExprBuilder<'ir, 'b>) -> Expr<'ir>>(
+        &mut self,
+        target: E,
+    ) -> FunctionCall<'ir> {
+        let target = target(&mut ExprBuilder::new(self.pool));
+
+        let sig = self.sig.take().expect("Signature Must be set");
+        let metadata = MetadataList(core::mem::take(&mut self.metadata));
+        let params = core::mem::take(&mut self.params);
+
+        FunctionCall {
+            target,
+            sig,
+            call_metadata: metadata,
+            params,
+        }
+    }
 }

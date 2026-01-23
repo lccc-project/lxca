@@ -84,6 +84,14 @@ impl<'ir, 'a> TypeBuilder<'ir, 'a> {
         self.finish(TypeBody::Function(sig))
     }
 
+    pub fn pointer<F: for<'b> FnOnce(&mut PointerTypeBuilder<'ir, 'b>) -> PointerType<'ir>>(
+        &mut self,
+        f: F,
+    ) -> Type<'ir> {
+        let ptr = f(&mut PointerTypeBuilder::new(self.pool));
+        self.finish(TypeBody::Pointer(ptr))
+    }
+
     pub fn named<S: Internalizable<'ir, Symbol>>(&mut self, name: S) -> Type<'ir> {
         let name = self.pool.intern(name);
         self.finish(TypeBody::Named(name))
@@ -102,6 +110,13 @@ impl<'ir> Type<'ir> {
         Type {
             metadata: MetadataList(Vec::new()),
             body: TypeBody::Integer(IntType::uint(width)),
+        }
+    }
+
+    pub const fn char(width: u16) -> Type<'ir> {
+        Type {
+            metadata: MetadataList(Vec::new()),
+            body: TypeBody::Char(width),
         }
     }
 
@@ -157,6 +172,34 @@ delegate_to_debug!(IntType);
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
 pub struct PointerType<'ir> {
     ty: Constant<'ir, Type<'ir>>,
+}
+
+pub struct PointerTypeBuilder<'ir, 'a> {
+    pool: &'a mut ConstantPool<'ir>,
+}
+
+impl<'ir, 'a> PointerTypeBuilder<'ir, 'a> {
+    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>) -> Self {
+        Self { pool }
+    }
+
+    pub fn finish<T: Internalizable<'ir, Type<'ir>>>(&mut self, ty: T) -> PointerType<'ir> {
+        let ty = self.pool.intern(ty);
+
+        PointerType { ty }
+    }
+
+    pub fn finish_with<
+        R: Internalizable<'ir, Type<'ir>>,
+        F: for<'b> FnOnce(&mut TypeBuilder<'ir, 'b>) -> R,
+    >(
+        &mut self,
+        f: F,
+    ) -> PointerType<'ir> {
+        let ty = f(&mut TypeBuilder::new(self.pool));
+
+        self.finish(ty)
+    }
 }
 
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
