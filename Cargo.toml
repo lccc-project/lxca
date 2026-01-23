@@ -1,0 +1,17 @@
+[package]
+name = "lxca"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bitflags = "2.9.0"
+hashbrown = { version = "0.15.2", features = ["raw-entry"] }
+uuid = "1.16.0"
+lxca-derive = { path = "lxca-derive" }
+indexmap = "2.9.0"
+
+[workspace]
+members = ["lxca-derive"]
+
+[features]
+test-files = []

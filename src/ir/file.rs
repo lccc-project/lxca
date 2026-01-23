@@ -1,0 +1,168 @@
+use std::marker::PhantomData;
+
+use lxca_derive::DebugWithConstants;
+
+use crate::{
+    binfmt::dec::Decode,
+    delegate_to_debug,
+    fmt_helpers::WithConstants,
+    ir::{
+        decls::{DeclBuilder, Declaration},
+        metadata::{Metadata, MetadataBuilder, MetadataFlags, MetadataListBuilder},
+    },
+};
+
+use super::{
+    PhantomIrMarker,
+    constant::{BorrowConstant, Constant, ConstantPool, ConstantPoolEntry, Internalizable},
+    metadata::MetadataList,
+    types::Type,
+};
+
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Version {
+    pub major: u16,
+    pub minor: u16,
+}
+
+impl<C> Decode<C> for Version {
+    fn decode<R: crate::binfmt::dec::Reader>(
+        decoder: &mut crate::binfmt::dec::Decoder<R, C>,
+    ) -> crate::binfmt::dec::Result<Self> {
+        let [major, minor] = u16::decode_array(decoder)?;
+
+        Ok(Version { major, minor })
+    }
+}
+
+impl Version {
+    pub const CURRENT: Version = Version { major: 0, minor: 0 };
+
+    pub const fn compatible_with(&self, expected: &Version) -> bool {
+        self.major == expected.major && expected.minor <= self.minor
+    }
+
+    pub const fn supported(&self) -> bool {
+        Self::CURRENT.compatible_with(self)
+    }
+}
+
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Magic;
+
+const MAGIC: [u8; 6] = *b"\xFFLXCA\xBC";
+
+impl<C> Decode<C> for Magic {
+    fn decode<R: crate::binfmt::dec::Reader>(
+        decoder: &mut crate::binfmt::dec::Decoder<R, C>,
+    ) -> crate::binfmt::dec::Result<Self> {
+        let arr = <[u8; 6]>::decode(decoder)?;
+
+        if arr != MAGIC {
+            Err(crate::binfmt::dec::Error::FormatError("Bad magic"))
+        } else {
+            Ok(Magic)
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct OrderMarker;
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub struct FileMetadata {
+    pub magic: Magic,
+    pub version: Version,
+}
+
+delegate_to_debug!(Version, FileMetadata);
+
+#[derive(DebugWithConstants)]
+pub struct File<'ir> {
+    _marker: PhantomIrMarker<'ir>,
+    metadata: FileMetadata,
+    constant_pool: ConstantPool<'ir>,
+    source_metadata: SourceMetadata<'ir>,
+    decls: Vec<Declaration<'ir>>,
+}
+
+impl<'ir> core::fmt::Debug for File<'ir> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        WithConstants(self, &self.constant_pool).fmt(f)
+    }
+}
+
+impl<'ir> File<'ir> {
+    pub fn pool(&self) -> &ConstantPool<'ir> {
+        &self.constant_pool
+    }
+}
+
+#[derive(DebugWithConstants)]
+pub struct SourceMetadata<'ir> {
+    _marker: PhantomIrMarker<'ir>,
+    target: Constant<'ir, str>,
+    metadata_items: MetadataList<'ir>,
+}
+
+pub struct FileBuilder<'ir> {
+    constant_pool: Option<ConstantPool<'ir>>,
+    metadata: Vec<Metadata<'ir>>,
+    decls: Vec<Declaration<'ir>>,
+}
+
+impl<'ir> FileBuilder<'ir> {
+    pub(crate) fn new() -> Self {
+        Self {
+            constant_pool: Some(unsafe { ConstantPool::new() }),
+            metadata: Vec::new(),
+            decls: Vec::new(),
+        }
+    }
+
+    pub fn constant_pool(&mut self) -> &mut ConstantPool<'ir> {
+        self.constant_pool
+            .as_mut()
+            .expect("A finished FileBuilder cannot be used")
+    }
+
+    pub fn declare<F: for<'b> FnOnce(&mut DeclBuilder<'ir, 'b>) -> Declaration<'ir>>(
+        &mut self,
+        f: F,
+    ) -> &mut Self {
+        let decl = f(&mut DeclBuilder::new(self.constant_pool()));
+        self.decls.push(decl);
+        self
+    }
+
+    pub fn with_metadata<F: for<'b> FnOnce(&mut MetadataBuilder<'ir, 'b>) -> Metadata<'ir>>(
+        &mut self,
+        f: F,
+    ) -> &mut Self {
+        let meta = f(&mut MetadataBuilder::new(self.constant_pool()));
+        self.metadata.push(meta);
+        self
+    }
+
+    pub fn finish<T: Internalizable<'ir, str>>(&mut self, targ: T) -> File<'ir> {
+        let mut constant_pool = self
+            .constant_pool
+            .take()
+            .expect("A finished FileBuilder cannot be used");
+        let target = constant_pool.intern(targ);
+        File {
+            _marker: PhantomIrMarker(PhantomData),
+            metadata: FileMetadata {
+                magic: Magic,
+                version: Version::CURRENT,
+            },
+            constant_pool,
+            source_metadata: SourceMetadata {
+                _marker: PhantomIrMarker(PhantomData),
+                target,
+                metadata_items: MetadataList(core::mem::take(&mut self.metadata)),
+            },
+            decls: core::mem::take(&mut self.decls),
+        }
+    }
+}
