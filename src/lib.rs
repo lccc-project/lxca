@@ -1,4 +1,4 @@
-#![feature(macro_metavar_expr)]
+#![feature(macro_metavar_expr, iter_advance_by)]
 
 #[macro_use]
 #[doc(hidden)]

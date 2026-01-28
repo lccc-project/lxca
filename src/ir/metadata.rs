@@ -1,6 +1,9 @@
 use std::{
     any::{Any, TypeId},
     borrow::Borrow,
+    iter::FusedIterator,
+    mem::{ManuallyDrop, MaybeUninit},
+    num::NonZero,
     ops::{Deref, DerefMut},
 };
 
@@ -365,3 +368,92 @@ impl<'ir, 'a> MetadataValueBuilder<'ir, 'a> {
         MetadataValue::Body(self.pool.intern(body))
     }
 }
+
+pub trait NestedMetadata<'ir> {
+    fn list_metadata(&self) -> &MetadataList<'ir>;
+
+    fn next<'a>(&'a self, cp: &'a ConstantPool<'ir>) -> Option<&'a Self>;
+}
+
+pub struct MetadataIter<'ir, 'iter, R> {
+    pool: &'iter ConstantPool<'ir>,
+    next: Option<&'iter R>,
+    list: core::slice::Iter<'iter, Metadata<'ir>>,
+}
+
+impl<'ir, 'iter, R> MetadataIter<'ir, 'iter, R> {
+    pub fn new(src: &'iter R, pool: &'iter ConstantPool<'ir>) -> Self {
+        Self {
+            pool,
+            next: Some(src),
+            list: const { &[] }.iter(),
+        }
+    }
+
+    fn advance_src(&mut self) -> Option<()>
+    where
+        R: NestedMetadata<'ir>,
+    {
+        let src = self.next?;
+
+        self.next = src.next(self.pool);
+        self.list = src.list_metadata().0.iter();
+
+        Some(())
+    }
+}
+
+impl<'ir, 'iter, R: NestedMetadata<'ir>> Iterator for MetadataIter<'ir, 'iter, R> {
+    type Item = &'iter Metadata<'ir>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(next) = self.list.next() {
+                return Some(next);
+            }
+
+            self.advance_src()?;
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let (lower, upper) = self.list.size_hint();
+
+        if self.next.is_none() {
+            (lower, upper)
+        } else {
+            (lower, None)
+        }
+    }
+
+    fn advance_by(&mut self, n: usize) -> Result<(), std::num::NonZero<usize>> {
+        let Some(mut count) = NonZero::new(n) else {
+            return Ok(());
+        };
+
+        loop {
+            match self.list.advance_by(count.get()) {
+                Ok(()) => break Ok(()),
+                Err(n) => {
+                    self.advance_src().ok_or(n)?;
+                    count = n;
+                }
+            }
+        }
+    }
+
+    fn count(mut self) -> usize
+    where
+        Self: Sized,
+    {
+        let mut count = 0;
+        loop {
+            count += self.list.len();
+            let Some(()) = self.advance_src() else {
+                return count;
+            };
+        }
+    }
+}
+
+impl<'ir, 'iter, R: NestedMetadata<'ir>> FusedIterator for MetadataIter<'ir, 'iter, R> {}

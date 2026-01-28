@@ -4,7 +4,7 @@ use crate::{
     delegate_to_debug,
     ir::{
         constant::{ConstantPool, Internalizable},
-        metadata::{Metadata, MetadataBuilder, MetadataList},
+        metadata::{Metadata, MetadataBuilder, MetadataIter, MetadataList, NestedMetadata},
         symbol::Symbol,
     },
 };
@@ -15,6 +15,32 @@ use super::constant::Constant;
 pub struct Type<'ir> {
     metadata: MetadataList<'ir>,
     body: TypeBody<'ir>,
+}
+
+impl<'ir> NestedMetadata<'ir> for Type<'ir> {
+    fn list_metadata(&self) -> &MetadataList<'ir> {
+        &self.metadata
+    }
+
+    fn next<'a>(&'a self, pool: &'a ConstantPool<'ir>) -> Option<&'a Self> {
+        match &self.body {
+            TypeBody::Interned(intern) => Some(intern.get(pool)),
+            _ => None,
+        }
+    }
+}
+
+impl<'ir> Type<'ir> {
+    pub fn body<'a>(&'a self, pool: &'a ConstantPool<'ir>) -> &'a TypeBody<'ir> {
+        match &self.body {
+            TypeBody::Interned(n) => n.get(pool).body(pool),
+            body => body,
+        }
+    }
+
+    pub fn metadata<'a>(&'a self, pool: &'a ConstantPool<'ir>) -> MetadataIter<'ir, 'a, Self> {
+        MetadataIter::new(self, pool)
+    }
 }
 
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
@@ -203,19 +229,90 @@ impl<'ir, 'a> PointerTypeBuilder<'ir, 'a> {
 }
 
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
-pub enum Signature<'ir> {
+enum SignatureBody<'ir> {
     Interned(Constant<'ir, Signature<'ir>>),
     InPlace {
         tag: Constant<'ir, str>,
         ret_ty: Constant<'ir, Type<'ir>>,
         params: Vec<Type<'ir>>,
+        is_varargs: bool,
     },
+}
+
+#[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
+pub struct Signature<'ir> {
+    metadata: MetadataList<'ir>,
+    body: SignatureBody<'ir>,
+}
+
+impl<'ir> NestedMetadata<'ir> for Signature<'ir> {
+    fn list_metadata(&self) -> &MetadataList<'ir> {
+        &self.metadata
+    }
+
+    fn next<'a>(&'a self, cp: &'a ConstantPool<'ir>) -> Option<&'a Self> {
+        match &self.body {
+            SignatureBody::Interned(sig) => Some(sig.get(cp)),
+            _ => None,
+        }
+    }
+}
+
+impl<'ir> Signature<'ir> {
+    pub fn interned(cn: Constant<'ir, Signature<'ir>>) -> Self {
+        Self {
+            metadata: MetadataList(Vec::new()),
+            body: SignatureBody::Interned(cn),
+        }
+    }
+
+    fn real_body<'a>(
+        &'a self,
+        pool: &'a ConstantPool<'ir>,
+    ) -> (
+        &'a Constant<'ir, str>,
+        &'a Constant<'ir, Type<'ir>>,
+        &'a [Type<'ir>],
+        bool,
+    ) {
+        match &self.body {
+            SignatureBody::Interned(constant) => constant.get(pool).real_body(pool),
+            SignatureBody::InPlace {
+                tag,
+                ret_ty,
+                params,
+                is_varargs,
+            } => (tag, ret_ty, params, *is_varargs),
+        }
+    }
+
+    pub fn params<'a>(&'a self, pool: &'a ConstantPool<'ir>) -> &'a [Type<'ir>] {
+        self.real_body(pool).2
+    }
+
+    pub fn ret_ty<'a>(&'a self, pool: &'a ConstantPool<'ir>) -> &'a Type<'ir> {
+        self.real_body(pool).1.get(pool)
+    }
+
+    pub fn tag<'a>(&'a self, pool: &'a ConstantPool<'ir>) -> &'a str {
+        self.real_body(pool).0.get(pool)
+    }
+
+    pub fn varargs(&self, pool: &ConstantPool<'ir>) -> bool {
+        self.real_body(pool).3
+    }
+
+    pub fn metadata<'a>(&'a self, pool: &'a ConstantPool<'ir>) -> MetadataIter<'ir, 'a, Self> {
+        MetadataIter::new(self, pool)
+    }
 }
 
 pub struct SignatureBuilder<'ir, 'a> {
     pool: &'a mut ConstantPool<'ir>,
     tag: Option<Constant<'ir, str>>,
     params: Vec<Type<'ir>>,
+    metadata: Vec<Metadata<'ir>>,
+    is_varargs: bool,
 }
 
 impl<'ir, 'a> SignatureBuilder<'ir, 'a> {
@@ -224,16 +321,43 @@ impl<'ir, 'a> SignatureBuilder<'ir, 'a> {
             pool,
             tag: None,
             params: Vec::new(),
+            metadata: Vec::new(),
+            is_varargs: false,
+        }
+    }
+
+    pub fn with_metadata<F: for<'b> FnOnce(&mut MetadataBuilder<'ir, 'b>) -> Metadata<'ir>>(
+        &mut self,
+        f: F,
+    ) -> &mut Self {
+        let meta = f(&mut MetadataBuilder::new(self.pool));
+        self.metadata.push(meta);
+        self
+    }
+
+    pub fn intern<S: Internalizable<'ir, Signature<'ir>>>(&mut self, sig: S) -> Signature<'ir> {
+        let metadata = MetadataList(core::mem::take(&mut self.metadata));
+        let ty = self.pool.intern(sig);
+
+        Signature {
+            metadata,
+            body: SignatureBody::Interned(ty),
         }
     }
 
     pub fn finish<T: Internalizable<'ir, Type<'ir>>>(&mut self, ret_ty: T) -> Signature<'ir> {
         let tag = self.tag.take().unwrap_or_else(|| self.pool.intern("C"));
         let ret_ty = self.pool.intern(ret_ty);
-        Signature::InPlace {
-            tag,
-            ret_ty,
-            params: core::mem::take(&mut self.params),
+        let metadata = MetadataList(core::mem::take(&mut self.metadata));
+
+        Signature {
+            metadata,
+            body: SignatureBody::InPlace {
+                tag,
+                ret_ty,
+                params: core::mem::take(&mut self.params),
+                is_varargs: self.is_varargs,
+            },
         }
     }
 
@@ -265,6 +389,11 @@ impl<'ir, 'a> SignatureBuilder<'ir, 'a> {
     ) -> &mut Self {
         let ty = f(&mut TypeBuilder::new(self.pool));
         self.param(ty);
+        self
+    }
+
+    pub fn varargs(&mut self) -> &mut Self {
+        self.is_varargs = true;
         self
     }
 }

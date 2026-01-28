@@ -56,7 +56,7 @@ pub fn hello_world<'ir>(targ: impl Internalizable<'ir, str>, ctx: IrCtx<'ir>) ->
                                                 f.global_address(
                                                     |ty| {
                                                         ty.function(|_| {
-                                                            Signature::Interned(puts_sig)
+                                                            Signature::interned(puts_sig)
                                                         })
                                                     },
                                                     sym!(puts),

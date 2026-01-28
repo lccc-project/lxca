@@ -566,7 +566,7 @@ impl<'ir, 'a> CallBuilder<'ir, 'a> {
     pub fn signature<S: Internalizable<'ir, Signature<'ir>>>(&mut self, sig: S) -> &mut Self {
         let sig = self.pool.intern(sig);
 
-        self.sig = Some(Signature::Interned(sig));
+        self.sig = Some(Signature::interned(sig));
         self
     }
 
