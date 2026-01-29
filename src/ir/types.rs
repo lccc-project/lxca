@@ -162,9 +162,10 @@ impl<'ir> Type<'ir> {
 }
 
 #[derive(Copy, Clone, Hash, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct IntType {
-    signed: bool,
-    width: u16,
+    pub signed: bool,
+    pub width: u16,
 }
 
 impl core::fmt::Debug for IntType {
