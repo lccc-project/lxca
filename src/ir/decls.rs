@@ -5,7 +5,7 @@ use crate::{
     ir::{
         constant::{ConstantPool, Internalizable},
         expr::BasicBlockBuilder,
-        metadata::{Metadata, MetadataBuilder},
+        metadata::{Metadata, MetadataBuilder, MetadataIter, NestedMetadata},
         types::SignatureBuilder,
     },
 };
@@ -117,6 +117,34 @@ pub struct FunctionBody<'ir> {
     ty: Signature<'ir>,
     function_metadata: MetadataList<'ir>,
     body: Option<Vec<BasicBlock<'ir>>>,
+}
+
+impl<'ir> NestedMetadata<'ir> for FunctionBody<'ir> {
+    fn list_metadata(&self) -> &MetadataList<'ir> {
+        &self.function_metadata
+    }
+
+    fn next<'a>(&'a self, cp: &'a ConstantPool<'ir>) -> Option<&'a Self> {
+        None
+    }
+}
+
+impl<'ir> FunctionBody<'ir> {
+    pub fn is_extern(&self) -> bool {
+        self.body.is_some()
+    }
+
+    pub fn body(&self) -> Option<&[BasicBlock<'ir>]> {
+        self.body.as_deref()
+    }
+
+    pub fn signature(&self) -> &Signature<'ir> {
+        &self.ty
+    }
+
+    pub fn metadata<'a>(&'a self, pool: &'a ConstantPool<'ir>) -> MetadataIter<'ir, 'a, Self> {
+        MetadataIter::new(self, pool)
+    }
 }
 
 pub struct FunctionBodyBuilder<'ir, 'a> {
