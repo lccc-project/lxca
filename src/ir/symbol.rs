@@ -60,6 +60,12 @@ impl core::fmt::Debug for Symbol {
     }
 }
 
+impl core::fmt::Display for Symbol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 impl Symbol {
     pub const fn new(st: &str) -> &Symbol {
         unsafe { &*(st as *const str as *const Symbol) }

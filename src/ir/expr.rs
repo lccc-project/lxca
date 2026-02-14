@@ -148,6 +148,37 @@ pub struct BasicBlock<'ir> {
     term: Terminator<'ir>,
 }
 
+impl<'ir> NestedMetadata<'ir> for BasicBlock<'ir> {
+    fn list_metadata(&self) -> &MetadataList<'ir> {
+        &self.bb_metadata
+    }
+
+    fn next<'a>(&'a self, _: &'a ConstantPool<'ir>) -> Option<&'a Self> {
+        None
+    }
+}
+
+impl<'ir> BasicBlock<'ir> {
+    pub fn metadata<'a>(&'a self, pool: &'a ConstantPool<'ir>) -> MetadataIter<'ir, 'a, Self> {
+        MetadataIter::new(self, pool)
+    }
+    pub fn stmts(&self) -> &[Statement<'ir>] {
+        &self.stats
+    }
+
+    pub fn term(&self) -> &Terminator<'ir> {
+        &self.term
+    }
+
+    pub fn label(&self) -> Constant<'ir, Symbol> {
+        self.label
+    }
+
+    pub fn params(&self) -> &[(Constant<'ir, Symbol>, Type<'ir>)] {
+        &self.params
+    }
+}
+
 pub struct BasicBlockBuilder<'ir, 'b> {
     pool: &'b mut ConstantPool<'ir>,
     metadata: Vec<Metadata<'ir>>,
