@@ -6,14 +6,13 @@ use crate::{
     fmt_helpers::DebugWithConstants,
     ir::{
         constant::{BoxOrConstant, ConstantPool, Internalizable},
-        metadata::MetadataBuilder,
+        metadata::{MetadataBuilder, MetadataIter, NestedMetadata},
         symbol::Symbol,
         types::{IntType, Signature, SignatureBuilder, TypeBuilder},
     },
 };
 
 use super::{
-    PhantomIrMarker,
     constant::Constant,
     metadata::{Metadata, MetadataList},
     types::Type,
@@ -23,6 +22,19 @@ use super::{
 pub struct Value<'ir> {
     ty: Type<'ir>,
     body: ValueBody<'ir>,
+}
+
+impl<'ir> Value<'ir> {
+    pub fn ty(&self) -> &Type<'ir> {
+        &self.ty
+    }
+
+    pub fn body<'a>(&'a self, pool: &'a ConstantPool<'ir>) -> &'a ValueBody<'ir> {
+        match &self.body {
+            ValueBody::Interned(v) => v.get(pool).body(pool),
+            body => body,
+        }
+    }
 }
 
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
@@ -216,6 +228,36 @@ pub struct Expr<'ir> {
     ty: Type<'ir>,
     meta: MetadataList<'ir>,
     body: ExprBody<'ir>,
+}
+
+impl<'ir> NestedMetadata<'ir> for Expr<'ir> {
+    fn list_metadata(&self) -> &MetadataList<'ir> {
+        &self.meta
+    }
+
+    fn next<'a>(&'a self, pool: &'a ConstantPool<'ir>) -> Option<&'a Self> {
+        match &self.body {
+            ExprBody::Interned(intern) => Some(intern.get(pool)),
+            _ => None,
+        }
+    }
+}
+
+impl<'ir> Expr<'ir> {
+    pub fn list_metadata<'a>(&'a self, pool: &'a ConstantPool<'ir>) -> MetadataIter<'ir, 'a, Self> {
+        MetadataIter::new(self, pool)
+    }
+
+    pub fn ty(&self) -> &Type<'ir> {
+        &self.ty
+    }
+
+    pub fn body<'a>(&'a self, pool: &'a ConstantPool<'ir>) -> &'a ExprBody<'ir> {
+        match &self.body {
+            ExprBody::Interned(intern) => intern.get(pool).body(pool),
+            body => body,
+        }
+    }
 }
 
 pub struct ExprBuilder<'ir, 'a> {
