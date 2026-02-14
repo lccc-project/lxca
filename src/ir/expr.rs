@@ -475,7 +475,7 @@ pub enum Statement<'ir> {
 
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
 pub struct AssignStatement<'ir> {
-    pub id: Constant<'ir, str>,
+    pub id: Constant<'ir, Symbol>,
     pub value: Expr<'ir>,
 }
 
