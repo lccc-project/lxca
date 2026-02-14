@@ -8,7 +8,7 @@ use crate::{
     fmt_helpers::WithConstants,
     ir::{
         decls::{DeclBuilder, Declaration},
-        metadata::{Metadata, MetadataBuilder},
+        metadata::{Metadata, MetadataBuilder, MetadataIter, NestedMetadata},
         types::{Signature, SignatureBuilder, TypeBuilder},
     },
 };
@@ -125,9 +125,31 @@ impl<'ir> core::fmt::Debug for File<'ir> {
     }
 }
 
+impl<'ir> NestedMetadata<'ir> for File<'ir> {
+    fn list_metadata(&self) -> &MetadataList<'ir> {
+        &self.source_metadata.metadata_items
+    }
+
+    fn next<'a>(&'a self, _: &'a ConstantPool<'ir>) -> Option<&'a Self> {
+        None
+    }
+}
+
 impl<'ir> File<'ir> {
+    pub fn metadata(&self) -> MetadataIter<'ir, '_, Self> {
+        MetadataIter::new(self, &self.constant_pool)
+    }
+
     pub fn pool(&self) -> &ConstantPool<'ir> {
         &self.constant_pool
+    }
+
+    pub fn target(&self) -> Constant<'ir, str> {
+        self.source_metadata.target
+    }
+
+    pub fn decls(&self) -> &[Declaration<'ir>] {
+        &self.decls
     }
 }
 
