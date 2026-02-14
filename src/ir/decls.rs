@@ -117,6 +117,7 @@ pub struct FunctionBody<'ir> {
     ty: Signature<'ir>,
     function_metadata: MetadataList<'ir>,
     body: Option<Vec<BasicBlock<'ir>>>,
+    param_names: Option<Vec<Constant<'ir, Symbol>>>,
 }
 
 impl<'ir> NestedMetadata<'ir> for FunctionBody<'ir> {
@@ -145,6 +146,10 @@ impl<'ir> FunctionBody<'ir> {
     pub fn metadata<'a>(&'a self, pool: &'a ConstantPool<'ir>) -> MetadataIter<'ir, 'a, Self> {
         MetadataIter::new(self, pool)
     }
+
+    pub fn param_names(&self) -> &[Constant<'ir, Symbol>] {
+        self.param_names.as_deref().unwrap_or(const { &[] })
+    }
 }
 
 pub struct FunctionBodyBuilder<'ir, 'a> {
@@ -152,6 +157,7 @@ pub struct FunctionBodyBuilder<'ir, 'a> {
     sig: Option<Signature<'ir>>,
     body: Option<Vec<BasicBlock<'ir>>>,
     metadata: Vec<Metadata<'ir>>,
+    param_names: Option<Vec<Constant<'ir, Symbol>>>,
 }
 
 impl<'ir, 'a> FunctionBodyBuilder<'ir, 'a> {
@@ -161,6 +167,7 @@ impl<'ir, 'a> FunctionBodyBuilder<'ir, 'a> {
             sig: None,
             body: None,
             metadata: Vec::new(),
+            param_names: None,
         }
     }
 
@@ -172,7 +179,13 @@ impl<'ir, 'a> FunctionBodyBuilder<'ir, 'a> {
             ty: sig,
             body,
             function_metadata: MetadataList(metadata),
+            param_names: self.param_names.take(),
         }
+    }
+
+    pub fn with_param_name(&mut self, name: Constant<'ir, Symbol>) -> &mut Self {
+        self.param_names.get_or_insert_with(Vec::new).push(name);
+        self
     }
 
     pub fn with_metadata<F: for<'b> FnOnce(&mut MetadataBuilder<'ir, 'b>) -> Metadata<'ir>>(
