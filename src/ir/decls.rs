@@ -37,6 +37,33 @@ pub struct Declaration<'ir> {
     body: DeclarationBody<'ir>,
 }
 
+impl<'ir> NestedMetadata<'ir> for Declaration<'ir> {
+    fn list_metadata(&self) -> &MetadataList<'ir> {
+        &self.metadata
+    }
+
+    fn next<'a>(&'a self, cp: &'a ConstantPool<'ir>) -> Option<&'a Self> {
+        None
+    }
+}
+
+impl<'ir> Declaration<'ir> {
+    pub fn metadata<'a>(&'a self, pool: &'a ConstantPool<'ir>) -> MetadataIter<'ir, 'a, Self> {
+        MetadataIter::new(self, pool)
+    }
+    pub fn linkage(&self) -> Linkage {
+        self.linkage
+    }
+
+    pub fn name(&self) -> Constant<'ir, Symbol> {
+        self.name
+    }
+
+    pub fn body(&self) -> &DeclarationBody<'ir> {
+        &self.body
+    }
+}
+
 pub struct DeclBuilder<'ir, 'a> {
     pool: &'a mut ConstantPool<'ir>,
     linkage: Linkage,
