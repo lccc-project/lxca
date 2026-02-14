@@ -159,7 +159,7 @@ impl<'ir> NestedMetadata<'ir> for FunctionBody<'ir> {
 
 impl<'ir> FunctionBody<'ir> {
     pub fn is_extern(&self) -> bool {
-        self.body.is_some()
+        self.body.is_none()
     }
 
     pub fn body(&self) -> Option<&[BasicBlock<'ir>]> {
