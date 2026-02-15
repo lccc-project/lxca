@@ -688,6 +688,28 @@ pub enum BoxOrConstant<'ir, T: ?Sized> {
     Boxed(Box<T>),
 }
 
+impl<'ir, T: ?Sized + BorrowConstant<'ir>> BoxOrConstant<'ir, T> {
+    pub fn get<'a>(&'a self, pool: &'a ConstantPool<'ir>) -> &'a T
+    where
+        &'a T: ConstantAs<'a, 'ir, Constant = T::Constant>,
+    {
+        match self {
+            Self::Interned(intern) => intern.get(pool),
+            Self::Boxed(bx) => bx,
+        }
+    }
+
+    pub fn read<'a>(&'a self, pool: &'a ConstantPool<'ir>) -> T
+    where
+        T: ConstantAs<'a, 'ir> + Sized + Copy,
+    {
+        match self {
+            BoxOrConstant::Interned(constant) => constant.read(pool),
+            BoxOrConstant::Boxed(bx) => **bx,
+        }
+    }
+}
+
 impl<'ir, T: ?Sized + DebugWithConstants<'ir>> DebugWithConstants<'ir> for BoxOrConstant<'ir, T>
 where
     Constant<'ir, T>: DebugWithConstants<'ir>,
