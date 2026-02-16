@@ -82,7 +82,7 @@ pub fn hello_world<'ir>(targ: impl Internalizable<'ir, str>, ctx: IrCtx<'ir>) ->
 pub fn addition<'ir>(targ: impl Internalizable<'ir, str>, ctx: IrCtx<'ir>) -> File<'ir> {
     ctx.build_file(|builder| {
         builder.declare(|f| {
-            f.function(sym!(return_42), |f| {
+            f.function(sym!(addition), |f| {
                 f.build_signature(|f| f.finish(Type::int(32)));
                 f.build_basic_block(|bb| {
                     bb.finish(sym!(0), |term| {
