@@ -201,6 +201,12 @@ pub struct PointerType<'ir> {
     ty: Constant<'ir, Type<'ir>>,
 }
 
+impl<'ir> PointerType<'ir> {
+    pub fn ty<'a>(&'a self, constants: &'a ConstantPool<'ir>) -> &'a Type<'ir> {
+        self.ty.get(constants)
+    }
+}
+
 pub struct PointerTypeBuilder<'ir, 'a> {
     pool: &'a mut ConstantPool<'ir>,
 }
