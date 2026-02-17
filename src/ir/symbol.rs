@@ -24,6 +24,14 @@ impl SymbolDef {
     pub const fn as_symbol(&self) -> &Symbol {
         Symbol::new(self.0.as_str())
     }
+
+    pub const fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
 }
 
 impl Deref for SymbolDef {
@@ -73,6 +81,10 @@ impl Symbol {
 
     pub fn into_def(&self) -> SymbolDef {
         SymbolDef(self.0.to_string())
+    }
+
+    pub const fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
