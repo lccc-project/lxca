@@ -12,7 +12,11 @@ use crate::{
     binfmt::dec::Decode,
     delegate_to_debug,
     fmt_helpers::DebugWithConstants,
-    ir::{expr::Expr, types::Signature},
+    ir::{
+        expr::Expr,
+        pretty::{PrettyPrint, PrettyPrinter},
+        types::Signature,
+    },
 };
 
 use super::{
@@ -87,12 +91,30 @@ where
     }
 }
 
+impl<'ir, T: ?Sized + BorrowConstant<'ir> + PrettyPrint<'ir>> PrettyPrint<'ir> for Constant<'ir, T>
+where
+    for<'a> &'a T: ConstantAs<'a, 'ir, Constant = T::Constant>,
+{
+    fn fmt(&self, f: &mut PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        if f.alternate() {
+            f.write_fmt(format_args!("/*${}*/ ", self.0))?;
+        }
+
+        let val = self.get(f.constants());
+        <T as PrettyPrint<'ir>>::fmt(val, f)
+    }
+}
+
 impl<'ir, T: ?Sized> Constant<'ir, T> {
     pub const fn borrow<R: ?Sized>(&self) -> Constant<'ir, R>
     where
         T: Borrow<R>,
     {
         Constant(self.0, PhantomData, self.2)
+    }
+
+    pub(crate) const fn key(&self) -> NonZeroUsize {
+        self.0
     }
 }
 
@@ -288,11 +310,19 @@ macro_rules! impl_from_integer_types {
     ($($int_ty:ty),* $(,)?) => {
         $(
 
-            impl<'ir> DebugWithConstants<'ir> for Constant<'ir, $int_ty> {
+            impl<'ir> crate::fmt_helpers::DebugWithConstants<'ir> for Constant<'ir, $int_ty> {
                 fn fmt(&self, f: &mut core::fmt::Formatter, pool: &ConstantPool<'ir>) -> core::fmt::Result {
                     let val = self.read(pool);
 
                     <$int_ty as core::fmt::Debug>::fmt(&val, f)
+                }
+            }
+            impl<'ir> crate::ir::pretty::PrettyPrint<'ir> for Constant<'ir, $int_ty> {
+                fn fmt(&self, f: &mut crate::ir::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+                    let key = self.key();
+                    let val = self.read(f.constants());
+
+                    f.write_fmt(format_args!("/* {key} */ {val}"))
                 }
             }
             impl<'ir> From<$int_ty> for ConstantPoolEntry<'ir> {
@@ -718,6 +748,18 @@ where
         match self {
             Self::Boxed(b) => b.fmt(f, pool),
             Self::Interned(c) => c.fmt(f, pool),
+        }
+    }
+}
+
+impl<'ir, T: ?Sized + PrettyPrint<'ir>> PrettyPrint<'ir> for BoxOrConstant<'ir, T>
+where
+    Constant<'ir, T>: PrettyPrint<'ir>,
+{
+    fn fmt(&self, f: &mut PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        match self {
+            Self::Boxed(b) => b.fmt(f),
+            Self::Interned(c) => c.fmt(f),
         }
     }
 }

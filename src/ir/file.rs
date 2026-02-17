@@ -9,6 +9,7 @@ use crate::{
     ir::{
         decls::{DeclBuilder, Declaration},
         metadata::{Metadata, MetadataBuilder, MetadataIter, NestedMetadata},
+        pretty::{PrettyPrint, PrettyPrinter},
         types::{Signature, SignatureBuilder, TypeBuilder},
     },
 };
@@ -150,6 +151,32 @@ impl<'ir> File<'ir> {
 
     pub fn decls(&self) -> &[Declaration<'ir>] {
         &self.decls
+    }
+}
+
+impl<'ir> core::fmt::Display for File<'ir> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut pretty_printer = PrettyPrinter::new(f, &self.constant_pool);
+
+        PrettyPrint::fmt(self, &mut pretty_printer)
+    }
+}
+
+impl<'ir> PrettyPrint<'ir> for File<'ir> {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        f.write_fmt(format_args!("version {};\n", self.metadata.version))?;
+        f.write_str("target ")?;
+        self.source_metadata.target.fmt(f)?;
+        f.write_str(";\n")?;
+
+        f.write_str("file metadata ")?;
+        self.source_metadata.metadata_items.fmt(f)?;
+        f.write_str("\n")?;
+
+        for decl in &self.decls {
+            decl.fmt(f)?;
+        }
+        Ok(())
     }
 }
 

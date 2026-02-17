@@ -2,11 +2,11 @@ use core::marker::PhantomData;
 use core::num::NonZeroU32;
 
 use crate::{
-    delegate_to_debug,
-    fmt_helpers::DebugWithConstants,
+    DebugWithConstants, delegate_to_debug,
     ir::{
         constant::{BoxOrConstant, ConstantPool, Internalizable},
         metadata::{MetadataBuilder, MetadataIter, NestedMetadata},
+        pretty::PrettyPrint,
         symbol::Symbol,
         types::{IntType, Signature, SignatureBuilder, TypeBuilder},
     },
@@ -24,6 +24,14 @@ pub struct Value<'ir> {
     body: ValueBody<'ir>,
 }
 
+impl<'ir> PrettyPrint<'ir> for Value<'ir> {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        self.ty.fmt(f)?;
+        f.write_str(" ")?;
+        self.body.fmt(f)
+    }
+}
+
 impl<'ir> Value<'ir> {
     pub fn ty(&self) -> &Type<'ir> {
         &self.ty
@@ -38,6 +46,7 @@ impl<'ir> Value<'ir> {
 }
 
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ValueBody<'ir> {
     Interned(Constant<'ir, Value<'ir>>),
     Integer(Constant<'ir, u128>),
@@ -45,11 +54,54 @@ pub enum ValueBody<'ir> {
     ByteLiteral(Constant<'ir, [u8]>),
     Null,
     GlobalAddr(Constant<'ir, Symbol>),
-    LocalAddr(Constant<'ir, str>),
+    LocalAddr(Constant<'ir, Symbol>),
     Uninit,
     Invalid,
     ZeroInit,
     Struct(StructValue<'ir>),
+}
+
+impl<'ir> PrettyPrint<'ir> for ValueBody<'ir> {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        match self {
+            ValueBody::Interned(val) => val.fmt(f),
+            ValueBody::Integer(val) => val.fmt(f),
+            ValueBody::StringLiteral(st) => st.fmt(f),
+            ValueBody::ByteLiteral(st) => {
+                let key = st.key();
+
+                let bytes = st.get(f.constants());
+
+                f.write_fmt(format_args!("/* {key} */ b\""))?;
+                let mut span_start = 0;
+
+                for (i, b) in bytes.iter().enumerate() {
+                    if !(0x20..0x7F).contains(b) {
+                        let sl = &bytes[span_start..i];
+                        if !sl.is_empty() {
+                            f.write_str(core::str::from_utf8(sl).unwrap())?;
+                        }
+                        f.write_fmt(format_args!("\\x{b:02X}"))?;
+                        span_start = i + 1;
+                    }
+                }
+                f.write_str("\"")
+            }
+            ValueBody::Null => f.write_str("null"),
+            ValueBody::GlobalAddr(constant) => {
+                f.write_str("global_addr ")?;
+                constant.fmt(f)
+            }
+            ValueBody::LocalAddr(constant) => {
+                f.write_str("global_addr %")?;
+                constant.fmt(f)
+            }
+            ValueBody::Uninit => f.write_str("uninit"),
+            ValueBody::Invalid => f.write_str("invalid"),
+            ValueBody::ZeroInit => f.write_str("zeroinit"),
+            ValueBody::Struct(val) => val.fmt(f),
+        }
+    }
 }
 
 pub struct ValueBuilder<'ir, 'a> {
@@ -127,14 +179,40 @@ impl<'ir, 'a> ValueBuilder<'ir, 'a> {
 
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
 pub struct StructValue<'ir> {
-    pub fields: Vec<(Constant<'ir, str>, Value<'ir>)>,
+    pub fields: Vec<(Constant<'ir, Symbol>, Value<'ir>)>,
     pub pad_fill: PadFill,
+}
+
+impl<'ir> PrettyPrint<'ir> for StructValue<'ir> {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        f.write_str("{")?;
+
+        for (name, val) in &self.fields {
+            name.fmt(f)?;
+            f.write_str(": ")?;
+            val.fmt(f)?;
+            f.write_str(", ")?;
+        }
+
+        self.pad_fill.fmt(f)?;
+
+        f.write_str("}")
+    }
 }
 
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub enum PadFill {
     ZeroInit,
     Uninit,
+}
+
+impl<'ir> PrettyPrint<'ir> for PadFill {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        match self {
+            Self::ZeroInit => f.write_str("pad zeroes"),
+            Self::Uninit => f.write_str("pad uninit"),
+        }
+    }
 }
 
 delegate_to_debug!(PadFill);
@@ -146,6 +224,40 @@ pub struct BasicBlock<'ir> {
     params: Vec<(Constant<'ir, Symbol>, Type<'ir>)>,
     stats: Vec<Statement<'ir>>,
     term: Terminator<'ir>,
+}
+
+impl<'ir> PrettyPrint<'ir> for BasicBlock<'ir> {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        f.write_tabs()?;
+        self.bb_metadata.fmt(f)?;
+        f.write_str("\n")?;
+        f.write_tabs()?;
+        self.label.fmt(f)?;
+        f.write_str("(")?;
+        let mut sep = "";
+        for (param, ty) in &self.params {
+            f.write_str(sep)?;
+            sep = ", ";
+            param.fmt(f)?;
+            f.write_str(": ")?;
+            ty.fmt(f)?;
+        }
+        f.write_str(") {\n")?;
+
+        let mut nested = f.nest();
+
+        for stmt in &self.stats {
+            nested.write_tabs()?;
+            stmt.fmt(&mut nested)?;
+            nested.write_str("\n")?;
+        }
+        nested.write_tabs()?;
+        self.term.fmt(&mut nested)?;
+        nested.write_str("\n")?;
+
+        f.write_tabs()?;
+        f.write_str("}")
+    }
 }
 
 impl<'ir> NestedMetadata<'ir> for BasicBlock<'ir> {
@@ -233,6 +345,7 @@ impl<'ir, 'a> BasicBlockBuilder<'ir, 'a> {
 }
 
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ExprBody<'ir> {
     Interned(Constant<'ir, Expr<'ir>>),
     Const(Value<'ir>),
@@ -248,10 +361,6 @@ pub enum ExprBody<'ir> {
         Constant<'ir, Type<'ir>>,
         Constant<'ir, str>,
     ),
-    Struct(
-        Constant<'ir, Type<'ir>>,
-        Vec<(Constant<'ir, str>, Expr<'ir>)>,
-    ),
 }
 
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
@@ -259,6 +368,60 @@ pub struct Expr<'ir> {
     ty: Type<'ir>,
     meta: MetadataList<'ir>,
     body: ExprBody<'ir>,
+}
+
+impl<'ir> PrettyPrint<'ir> for Expr<'ir> {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        self.meta.fmt(f)?;
+
+        match &self.body {
+            ExprBody::Interned(constant) => constant.fmt(f),
+            ExprBody::Const(value) => {
+                f.write_str("const ")?;
+                value.fmt(f)
+            }
+            ExprBody::UnaryOp(op, overflow, val) => {
+                op.fmt(f)?;
+                f.write_str(" ")?;
+                self.ty.fmt(f)?;
+                f.write_str(" ")?;
+                overflow.fmt(f)?;
+                f.write_str(" ")?;
+                val.fmt(f)
+            }
+            ExprBody::BinaryOp(BinaryExpr(op, overflow, left, right)) => {
+                op.fmt(f)?;
+                f.write_str(" ")?;
+                self.ty.fmt(f)?;
+                f.write_str(" ")?;
+                overflow.fmt(f)?;
+                f.write_str(" ")?;
+                left.fmt(f)?;
+                f.write_str(", ")?;
+                right.fmt(f)
+            }
+            ExprBody::ReadField(base, struct_ty, field) => {
+                f.write_str("field ")?;
+                self.ty.fmt(f)?;
+                base.fmt(f)?;
+                f.write_str(" ")?;
+
+                struct_ty.fmt(f)?;
+                f.write_str(".")?;
+                field.fmt(f)
+            }
+            ExprBody::ProjectField(base, struct_ty, field) => {
+                f.write_str("project field ")?;
+                self.ty.fmt(f)?;
+                base.fmt(f)?;
+                f.write_str(" ")?;
+
+                struct_ty.fmt(f)?;
+                f.write_str(".")?;
+                field.fmt(f)
+            }
+        }
+    }
 }
 
 impl<'ir> NestedMetadata<'ir> for Expr<'ir> {
@@ -375,11 +538,19 @@ impl<'ir, 'a> ExprBuilder<'ir, 'a> {
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub enum UnaryOp {
     BitNot,
-    LogicNot,
     Minus,
 }
 
 delegate_to_debug!(UnaryOp);
+
+impl<'ir> PrettyPrint<'ir> for UnaryOp {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        match self {
+            Self::BitNot => f.write_str("bnot"),
+            Self::Minus => f.write_str("neg"),
+        }
+    }
+}
 
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub enum BinaryOp {
@@ -388,6 +559,24 @@ pub enum BinaryOp {
     Mul,
     Div,
     Mod,
+    And,
+    Or,
+    Xor,
+}
+
+impl<'ir> PrettyPrint<'ir> for BinaryOp {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        match self {
+            BinaryOp::Add => f.write_str("add"),
+            BinaryOp::Sub => f.write_str("sub"),
+            BinaryOp::Mul => f.write_str("mul"),
+            BinaryOp::Div => f.write_str("div"),
+            BinaryOp::Mod => f.write_str("mod"),
+            BinaryOp::And => f.write_str("and"),
+            BinaryOp::Or => f.write_str("or"),
+            BinaryOp::Xor => f.write_str("xor"),
+        }
+    }
 }
 
 delegate_to_debug!(BinaryOp);
@@ -466,17 +655,48 @@ pub enum OverflowBehaviour {
     Unchecked,
 }
 
+impl<'ir> PrettyPrint<'ir> for OverflowBehaviour {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        match self {
+            OverflowBehaviour::Wrap => f.write_str("wrap"),
+            OverflowBehaviour::Unchecked => f.write_str("unchecked"),
+        }
+    }
+}
+
 delegate_to_debug!(OverflowBehaviour);
 
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Statement<'ir> {
     Assign(AssignStatement<'ir>),
+}
+
+impl<'ir> PrettyPrint<'ir> for Statement<'ir> {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        match self {
+            Statement::Assign(stmt) => stmt.fmt(f),
+        }
+    }
 }
 
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
 pub struct AssignStatement<'ir> {
     pub id: Constant<'ir, Symbol>,
+    pub ty: Constant<'ir, Type<'ir>>,
     pub value: Expr<'ir>,
+}
+
+impl<'ir> PrettyPrint<'ir> for AssignStatement<'ir> {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        f.write_str("let ")?;
+        self.id.fmt(f)?;
+        f.write_str(": ")?;
+        self.ty.fmt(f)?;
+        f.write_str(" = ")?;
+        self.value.fmt(f)?;
+        f.write_str(";")
+    }
 }
 
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
@@ -485,13 +705,49 @@ pub struct Terminator<'ir> {
     pub body: TerminatorBody<'ir>,
 }
 
+impl<'ir> PrettyPrint<'ir> for Terminator<'ir> {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        self.meta.fmt(f)?;
+        self.body.fmt(f)
+    }
+}
+
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TerminatorBody<'ir> {
     Unreachable,
     Jump(JumpTarget<'ir>),
     Call(CallTerm<'ir>),
     Tailcall(FunctionCall<'ir>),
     Return(Expr<'ir>),
+    ReturnVoid,
+}
+
+impl<'ir> PrettyPrint<'ir> for TerminatorBody<'ir> {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        match self {
+            TerminatorBody::Unreachable => f.write_str("unreachable"),
+            TerminatorBody::Jump(jump_target) => {
+                f.write_str("jump ")?;
+                jump_target.fmt(f)
+            }
+            TerminatorBody::Call(call_term) => {
+                f.write_str("call ")?;
+                call_term.func.fmt(f)?;
+                f.write_str(" next ")?;
+                call_term.next.fmt(f)
+            }
+            TerminatorBody::Tailcall(call) => {
+                f.write_str("tailcall ")?;
+                call.fmt(f)
+            }
+            TerminatorBody::Return(expr) => {
+                f.write_str("return ")?;
+                expr.fmt(f)
+            }
+            TerminatorBody::ReturnVoid => f.write_str("return void"),
+        }
+    }
 }
 
 pub struct TermBuilder<'ir, 'a> {
@@ -553,6 +809,23 @@ pub struct JumpTarget<'ir> {
     pub args: Vec<Constant<'ir, Symbol>>,
 }
 
+impl<'ir> PrettyPrint<'ir> for JumpTarget<'ir> {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        self.metadata.fmt(f)?;
+        self.target.fmt(f)?;
+        f.write_str(" (")?;
+
+        let mut sep = "";
+        for arg in &self.args {
+            f.write_str(sep)?;
+            sep = ", ";
+            arg.fmt(f)?;
+        }
+
+        f.write_str(")")
+    }
+}
+
 pub struct JumpBuilder<'ir, 'a> {
     pool: &'a mut ConstantPool<'ir>,
     metadata: Vec<Metadata<'ir>>,
@@ -608,6 +881,24 @@ pub struct FunctionCall<'ir> {
     pub sig: Signature<'ir>,
     pub call_metadata: MetadataList<'ir>,
     pub params: Vec<Expr<'ir>>,
+}
+
+impl<'ir> PrettyPrint<'ir> for FunctionCall<'ir> {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        self.sig.fmt(f)?;
+        f.write_str(" ")?;
+        self.call_metadata.fmt(f)?;
+        self.target.fmt(f)?;
+        f.write_str(" (")?;
+        let mut sep = "";
+
+        for arg in &self.params {
+            f.write_str(sep)?;
+            sep = ", ";
+            arg.fmt(f)?;
+        }
+        f.write_str(")")
+    }
 }
 
 pub struct CallBuilder<'ir, 'a> {

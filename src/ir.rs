@@ -70,6 +70,8 @@ pub mod metadata;
 pub mod symbol;
 pub mod types;
 
+pub mod pretty;
+
 #[cfg(any(test, feature = "test-files"))]
 mod test_files_impl;
 

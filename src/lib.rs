@@ -14,3 +14,5 @@ pub mod target;
 pub mod traits;
 
 extern crate self as lxca;
+
+pub use lxca_derive::DebugWithConstants;

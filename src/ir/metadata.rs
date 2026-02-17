@@ -12,6 +12,7 @@ use crate::{
     fmt_helpers::DebugWithConstants,
     ir::{
         constant::{ConstantPool, Internalizable},
+        pretty,
         symbol::Symbol,
     },
     traits::DynHash,
@@ -21,6 +22,17 @@ use super::constant::{BorrowConstant, Constant};
 
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
 pub struct MetadataList<'ir>(pub(crate) Vec<Metadata<'ir>>);
+
+impl<'ir> super::pretty::PrettyPrint<'ir> for MetadataList<'ir> {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        for meta in &self.0 {
+            f.write_str(" ")?;
+            super::pretty::PrettyPrint::fmt(meta, f)?;
+        }
+
+        Ok(())
+    }
+}
 
 impl<'ir> Deref for MetadataList<'ir> {
     type Target = Vec<Metadata<'ir>>;
@@ -57,10 +69,35 @@ bitflags::bitflags! {
 
 delegate_to_debug!(MetadataFlags);
 
+impl<'ir> super::pretty::PrettyPrint<'ir> for MetadataFlags {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        for flag in self.iter() {
+            bitflags::bitflags_match! {flag, {
+                Self::OPT_REQUIRED => f.write_str("opt required"),
+                Self::OPT_PRESERVE => f.write_str("opt preserve"),
+                Self::CG_REQUIRED => f.write_str("cg required"),
+                _ => Ok(())
+            }}?;
+
+            f.write_str(" ")?;
+        }
+
+        Ok(())
+    }
+}
+
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
 pub struct Metadata<'ir> {
     flags: MetadataFlags,
     body: MetadataBody<'ir>,
+}
+
+impl<'ir> super::pretty::PrettyPrint<'ir> for Metadata<'ir> {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        super::pretty::PrettyPrint::fmt(&self.flags, f)?;
+
+        super::pretty::PrettyPrint::fmt(&self.body, f)
+    }
 }
 
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
@@ -74,13 +111,71 @@ pub enum MetadataBody<'ir> {
     Structural(Box<dyn DynMetadataTarget<'ir>>),
 }
 
+impl<'ir> super::pretty::PrettyPrint<'ir> for MetadataBody<'ir> {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        match self {
+            MetadataBody::Interned(constant) => {
+                f.write_fmt(format_args!("/* ${} */ [", constant.key()))?;
+                let mut sep = "";
+                for m in constant.get(f.constants()) {
+                    f.write_str(sep)?;
+                    sep = " ";
+                    super::pretty::PrettyPrint::fmt(m, f)?;
+                }
+                f.write_str("]")
+            }
+            MetadataBody::Simple(constant) => {
+                f.write_str("#[")?;
+                pretty::PrettyPrint::fmt(constant, f)?;
+                f.write_str("]")
+            }
+            MetadataBody::KeyValue { key, value } => {
+                f.write_str("#[")?;
+                pretty::PrettyPrint::fmt(key, f)?;
+                f.write_str(" = ")?;
+                pretty::PrettyPrint::fmt(value, f)?;
+                f.write_str("]")
+            }
+            MetadataBody::Structural(targ) => {
+                f.write_str("#[")?;
+                pretty::PrettyPrint::fmt(targ, f)?;
+                f.write_str("]")
+            }
+        }
+    }
+}
+
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
 pub enum MetadataValue<'ir> {
     Body(Constant<'ir, [Metadata<'ir>]>),
     String(Constant<'ir, str>),
     Symbol(Constant<'ir, Symbol>),
     Integer(Constant<'ir, u128>),
-    Label(Constant<'ir, str>),
+    Label(Constant<'ir, Symbol>),
+}
+
+impl<'ir> pretty::PrettyPrint<'ir> for MetadataValue<'ir> {
+    fn fmt(&self, f: &mut pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        match self {
+            MetadataValue::Body(constant) => {
+                f.write_fmt(format_args!("/* ${} */ [", constant.key()))?;
+                let mut sep = "";
+                for m in constant.get(f.constants()) {
+                    f.write_str(sep)?;
+                    sep = " ";
+                    super::pretty::PrettyPrint::fmt(m, f)?;
+                }
+                f.write_str("]")
+            }
+            MetadataValue::String(constant) => super::pretty::PrettyPrint::fmt(constant, f),
+            MetadataValue::Symbol(constant) => super::pretty::PrettyPrint::fmt(constant, f),
+            MetadataValue::Integer(constant) => super::pretty::PrettyPrint::fmt(constant, f),
+            MetadataValue::Label(constant) => {
+                f.write_str("local ")?;
+                super::pretty::PrettyPrint::fmt(constant, f)
+            }
+        }
+    }
 }
 
 /// # Safety
@@ -117,14 +212,21 @@ macro_rules! impl_ir_any {
 }
 
 pub trait MetadataTarget<'ir>:
-    IrAny<'ir> + DebugWithConstants<'ir> + Send + Sync + core::hash::Hash + core::cmp::Eq + Clone
+    IrAny<'ir>
+    + DebugWithConstants<'ir>
+    + Send
+    + Sync
+    + core::hash::Hash
+    + core::cmp::Eq
+    + Clone
+    + super::pretty::PrettyPrint<'ir>
 {
     const FLAGS: MetadataFlags = MetadataFlags::empty();
     fn encode(&self, pool: &mut ConstantPool<'ir>) -> Metadata<'ir>;
 }
 
 pub trait DynMetadataTarget<'ir>:
-    IrAny<'ir> + DebugWithConstants<'ir> + Send + Sync + DynHash
+    IrAny<'ir> + DebugWithConstants<'ir> + Send + Sync + DynHash + super::pretty::PrettyPrint<'ir>
 {
     fn encode(&self, pool: &mut ConstantPool<'ir>) -> Metadata<'ir>;
 
@@ -353,7 +455,7 @@ impl<'ir, 'a> MetadataValueBuilder<'ir, 'a> {
         MetadataValue::Symbol(self.pool.intern(val))
     }
 
-    pub fn label<S: Internalizable<'ir, str>>(&mut self, label: S) -> MetadataValue<'ir> {
+    pub fn label<S: Internalizable<'ir, Symbol>>(&mut self, label: S) -> MetadataValue<'ir> {
         MetadataValue::Label(self.pool.intern(label))
     }
 

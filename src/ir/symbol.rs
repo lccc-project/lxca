@@ -16,6 +16,12 @@ impl core::fmt::Debug for SymbolDef {
     }
 }
 
+impl core::fmt::Display for SymbolDef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 impl SymbolDef {
     pub const fn new(st: String) -> SymbolDef {
         SymbolDef(st)

@@ -5,6 +5,7 @@ use crate::{
     ir::{
         constant::{ConstantPool, Internalizable},
         metadata::{Metadata, MetadataBuilder, MetadataIter, MetadataList, NestedMetadata},
+        pretty::PrettyPrint,
         symbol::Symbol,
     },
 };
@@ -15,6 +16,13 @@ use super::constant::Constant;
 pub struct Type<'ir> {
     metadata: MetadataList<'ir>,
     body: TypeBody<'ir>,
+}
+
+impl<'ir> PrettyPrint<'ir> for Type<'ir> {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        self.metadata.fmt(f)?;
+        self.body.fmt(f)
+    }
 }
 
 impl<'ir> NestedMetadata<'ir> for Type<'ir> {
@@ -44,6 +52,7 @@ impl<'ir> Type<'ir> {
 }
 
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TypeBody<'ir> {
     Interned(Constant<'ir, Type<'ir>>),
     Named(Constant<'ir, Symbol>),
@@ -52,6 +61,27 @@ pub enum TypeBody<'ir> {
     Pointer(PointerType<'ir>),
     Function(Signature<'ir>),
     Void,
+}
+
+impl<'ir> PrettyPrint<'ir> for TypeBody<'ir> {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        match self {
+            TypeBody::Interned(ty) => ty.fmt(f),
+            TypeBody::Named(named) => named.fmt(f),
+            TypeBody::Integer(int_type) => int_type.fmt(f),
+            TypeBody::Char(v) => {
+                f.write_str("char(")?;
+                v.fmt(f)?;
+                f.write_str(")")
+            }
+            TypeBody::Pointer(ptr) => ptr.fmt(f),
+            TypeBody::Function(sig) => {
+                f.write_str("fn")?;
+                sig.fmt(f)
+            }
+            TypeBody::Void => f.write_str("void()"),
+        }
+    }
 }
 
 pub struct TypeBuilder<'ir, 'a> {
@@ -168,11 +198,21 @@ pub struct IntType {
     pub width: u16,
 }
 
+impl<'ir> PrettyPrint<'ir> for IntType {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        f.write_fmt(format_args!(
+            "{}({})",
+            if self.signed { "int" } else { "uint" },
+            self.width
+        ))
+    }
+}
+
 impl core::fmt::Debug for IntType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!(
-            "{}{}",
-            if self.signed { "i" } else { "u" },
+            "{}({})",
+            if self.signed { "int" } else { "uint" },
             self.width
         ))
     }
@@ -199,6 +239,13 @@ delegate_to_debug!(IntType);
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
 pub struct PointerType<'ir> {
     ty: Constant<'ir, Type<'ir>>,
+}
+
+impl<'ir> PrettyPrint<'ir> for PointerType<'ir> {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        f.write_str("*")?;
+        self.ty.fmt(f)
+    }
 }
 
 impl<'ir> PointerType<'ir> {
@@ -250,6 +297,42 @@ enum SignatureBody<'ir> {
 pub struct Signature<'ir> {
     metadata: MetadataList<'ir>,
     body: SignatureBody<'ir>,
+}
+
+impl<'ir> PrettyPrint<'ir> for Signature<'ir> {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        self.metadata.fmt(f)?;
+
+        match &self.body {
+            SignatureBody::Interned(constant) => constant.fmt(f),
+            SignatureBody::InPlace {
+                tag,
+                ret_ty,
+                params,
+                is_varargs,
+            } => {
+                f.write_str("extern ")?;
+                tag.fmt(f)?;
+
+                f.write_str(" (")?;
+                let mut sep = "";
+
+                for param in params {
+                    f.write_str(sep)?;
+                    sep = ", ";
+                    param.fmt(f)?;
+                }
+
+                if *is_varargs {
+                    f.write_str(sep)?;
+                    f.write_str("...")?;
+                }
+
+                f.write_str(") -> ")?;
+                ret_ty.fmt(f)
+            }
+        }
+    }
 }
 
 impl<'ir> NestedMetadata<'ir> for Signature<'ir> {

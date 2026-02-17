@@ -6,6 +6,7 @@ use crate::{
         constant::{ConstantPool, Internalizable},
         expr::BasicBlockBuilder,
         metadata::{Metadata, MetadataBuilder, MetadataIter, NestedMetadata},
+        pretty::{PrettyPrint, delegate_to_display},
         types::SignatureBuilder,
     },
 };
@@ -29,6 +30,17 @@ pub enum Linkage {
 
 delegate_to_debug!(Linkage);
 
+impl<'ir> PrettyPrint<'ir> for Linkage {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        match self {
+            Linkage::External => f.write_str("external"),
+            Linkage::Internal => f.write_str("internal"),
+            Linkage::Weak => f.write_str("weak"),
+            Linkage::Const => f.write_str("const"),
+        }
+    }
+}
+
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
 pub struct Declaration<'ir> {
     metadata: MetadataList<'ir>,
@@ -37,12 +49,64 @@ pub struct Declaration<'ir> {
     body: DeclarationBody<'ir>,
 }
 
+impl<'ir> PrettyPrint<'ir> for Declaration<'ir> {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        f.write_tabs()?;
+        self.metadata.fmt(f)?;
+        f.write_str("\n")?;
+        f.write_tabs()?;
+        self.linkage.fmt(f)?;
+        f.write_str(" ")?;
+
+        match &self.body {
+            DeclarationBody::Object(object_body) => {
+                f.write_str("static ")?;
+                object_body.object_metadata.fmt(f)?;
+                self.name.fmt(f)?;
+
+                match &object_body.initializer {
+                    Some(init) => {
+                        f.write_str(" = ")?;
+                        init.fmt(f)?;
+                    }
+                    None => {}
+                }
+
+                f.write_str(";\n")
+            }
+            DeclarationBody::Function(function_body) => {
+                f.write_str("fn ")?;
+                function_body.function_metadata.fmt(f)?;
+                self.name.fmt(f)?;
+
+                f.write_str(" ")?;
+
+                function_body.ty.fmt(f)?;
+
+                match &function_body.body {
+                    Some(bbs) => {
+                        f.write_str("{\n")?;
+                        let mut pretty = f.nest();
+                        for bb in bbs {
+                            bb.fmt(&mut pretty)?;
+                            pretty.write_str("\n")?;
+                        }
+                        f.write_tabs()?;
+                        f.write_str("}\n")
+                    }
+                    None => f.write_str(";\n"),
+                }
+            }
+        }
+    }
+}
+
 impl<'ir> NestedMetadata<'ir> for Declaration<'ir> {
     fn list_metadata(&self) -> &MetadataList<'ir> {
         &self.metadata
     }
 
-    fn next<'a>(&'a self, cp: &'a ConstantPool<'ir>) -> Option<&'a Self> {
+    fn next<'a>(&'a self, _: &'a ConstantPool<'ir>) -> Option<&'a Self> {
         None
     }
 }
@@ -273,4 +337,17 @@ pub enum Initializer<'ir> {
     ZeroInit,
     Constant(Value<'ir>),
     Include(Constant<'ir, str>),
+}
+
+impl<'ir> PrettyPrint<'ir> for Initializer<'ir> {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        match self {
+            Initializer::ZeroInit => f.write_str("zeroinit"),
+            Initializer::Constant(value) => value.fmt(f),
+            Initializer::Include(constant) => {
+                f.write_str("include ")?;
+                constant.fmt(f)
+            }
+        }
+    }
 }
