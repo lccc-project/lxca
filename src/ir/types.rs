@@ -76,7 +76,7 @@ impl<'ir> PrettyPrint<'ir> for TypeBody<'ir> {
             }
             TypeBody::Pointer(ptr) => ptr.fmt(f),
             TypeBody::Function(sig) => {
-                f.write_str("fn")?;
+                f.write_str("fn ")?;
                 sig.fmt(f)
             }
             TypeBody::Void => f.write_str("void()"),

@@ -38,42 +38,43 @@ pub fn hello_world<'ir>(targ: impl Internalizable<'ir, str>, ctx: IrCtx<'ir>) ->
         builder
             .declare(|f| f.function(sym!(puts), |f| f.signature(puts_sig).finish()))
             .declare(|f| {
-                f.function(sym!(main), |f| {
-                    f.build_signature(|sig| sig.finish(Type::int(32)))
-                        .build_basic_block(|bb| {
-                            bb.finish(sym!(0), |term| {
-                                term.call(|call| {
-                                    call.arg(|expr| {
-                                        expr.value(|v| {
-                                            v.ty(Type::intern(pchar)).string("Hello World!\0")
-                                        })
-                                    })
-                                    .signature(puts_sig)
-                                    .finish_with_next(
-                                        |jump| jump.arg(sym!(#return)).finish(sym!(1)),
-                                        |expr| {
-                                            expr.value(|f| {
-                                                f.global_address(
-                                                    |ty| {
-                                                        ty.function(|_| {
-                                                            Signature::interned(puts_sig)
-                                                        })
-                                                    },
-                                                    sym!(puts),
-                                                )
+                f.linkage(crate::ir::decls::Linkage::External)
+                    .function(sym!(main), |f| {
+                        f.build_signature(|sig| sig.finish(Type::int(32)))
+                            .build_basic_block(|bb| {
+                                bb.finish(sym!(0), |term| {
+                                    term.call(|call| {
+                                        call.arg(|expr| {
+                                            expr.value(|v| {
+                                                v.ty(Type::intern(pchar)).string("Hello World!\0")
                                             })
-                                        },
-                                    )
+                                        })
+                                        .signature(puts_sig)
+                                        .finish_with_next(
+                                            |jump| jump.arg(sym!(#return)).finish(sym!(1)),
+                                            |expr| {
+                                                expr.value(|f| {
+                                                    f.global_address(
+                                                        |ty| {
+                                                            ty.function(|_| {
+                                                                Signature::interned(puts_sig)
+                                                            })
+                                                        },
+                                                        sym!(puts),
+                                                    )
+                                                })
+                                            },
+                                        )
+                                    })
                                 })
                             })
-                        })
-                        .build_basic_block(|bb| {
-                            bb.param(sym!(0), Type::int(32)).finish(sym!(1), |term| {
-                                term.return_val(|expr| expr.const_int(IntType::int(32), 0u128))
+                            .build_basic_block(|bb| {
+                                bb.param(sym!(0), Type::int(32)).finish(sym!(1), |term| {
+                                    term.return_val(|expr| expr.const_int(IntType::int(32), 0u128))
+                                })
                             })
-                        })
-                        .finish()
-                })
+                            .finish()
+                    })
             })
             .finish(targ)
     })
@@ -100,5 +101,21 @@ pub fn addition<'ir>(targ: impl Internalizable<'ir, str>, ctx: IrCtx<'ir>) -> Fi
         });
 
         builder.finish(targ)
+    })
+}
+
+pub fn infinite_loop<'ir>(targ: impl Internalizable<'ir, str>, ctx: IrCtx<'ir>) -> File<'ir> {
+    ctx.build_file(|builder| {
+        builder
+            .declare(|f| {
+                f.function(sym!(infinite_loop), |f| {
+                    f.build_signature(|f| f.finish(Type::void()))
+                        .build_basic_block(|bb| {
+                            bb.finish(sym!(0), |term| term.jump(|jmp| jmp.finish(sym!(0))))
+                        })
+                        .finish()
+                })
+            })
+            .finish(targ)
     })
 }

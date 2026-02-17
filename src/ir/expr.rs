@@ -793,12 +793,32 @@ impl<'ir, 'a> TermBuilder<'ir, 'a> {
         self.finish(TerminatorBody::Return(expr))
     }
 
+    pub fn return_void(&mut self) -> Terminator<'ir> {
+        self.finish(TerminatorBody::ReturnVoid)
+    }
+
     pub fn call<F: for<'b> FnOnce(&mut CallBuilder<'ir, 'b>) -> CallTerm<'ir>>(
         &mut self,
         f: F,
     ) -> Terminator<'ir> {
         let term = f(&mut CallBuilder::new(self.pool));
         self.finish(TerminatorBody::Call(term))
+    }
+
+    pub fn jump<F: for<'b> FnOnce(&mut JumpBuilder<'ir, 'b>) -> JumpTarget<'ir>>(
+        &mut self,
+        f: F,
+    ) -> Terminator<'ir> {
+        let term = f(&mut JumpBuilder::new(self.pool));
+        self.finish(TerminatorBody::Jump(term))
+    }
+
+    pub fn tailcall<F: for<'b> FnOnce(&mut CallBuilder<'ir, 'b>) -> FunctionCall<'ir>>(
+        &mut self,
+        f: F,
+    ) -> Terminator<'ir> {
+        let term = f(&mut CallBuilder::new(self.pool));
+        self.finish(TerminatorBody::Tailcall(term))
     }
 }
 
