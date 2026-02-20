@@ -135,13 +135,14 @@ pub fn black_box<'ir>(targ: impl Internalizable<'ir, str>, ctx: IrCtx<'ir>) -> F
                             })
                             .finish(sym!(%0), |f| {
                                 f.call_intrinsic(|f| {
-                                    f.signature_with(|sig| {
-                                        sig.param(Type::uint(32)).finish(Type::uint(32))
-                                    })
-                                    .intrinsic_with_next(
-                                        |j| j.arg(sym!(#return)).finish(sym!(%2)),
-                                        Intrinsic::BlackBox,
-                                    )
+                                    f.arg(|f| f.ty(Type::uint(32)).ssa_var(sym!(%1)))
+                                        .signature_with(|sig| {
+                                            sig.param(Type::uint(32)).finish(Type::uint(32))
+                                        })
+                                        .intrinsic_with_next(
+                                            |j| j.arg(sym!(#return)).finish(sym!(%2)),
+                                            Intrinsic::BlackBox,
+                                        )
                                 })
                             })
                         })
