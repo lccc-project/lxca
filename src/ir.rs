@@ -67,10 +67,11 @@ pub mod decls;
 pub mod expr;
 pub mod file;
 pub mod metadata;
+pub mod pretty;
 pub mod symbol;
 pub mod types;
 
-pub mod pretty;
+pub mod intrinsics;
 
 #[cfg(any(test, feature = "test-files"))]
 mod test_files_impl;

@@ -92,6 +92,26 @@ impl Symbol {
     pub const fn as_str(&self) -> &str {
         &self.0
     }
+
+    pub fn components(&self) -> Components<'_> {
+        Components(self.0.split("::"))
+    }
+}
+
+pub struct Components<'a>(core::str::Split<'a, &'static str>);
+
+impl<'a> Iterator for Components<'a> {
+    type Item = &'a Symbol;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next().map(Symbol::new)
+    }
+}
+
+impl<'a> DoubleEndedIterator for Components<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.0.next().map(Symbol::new)
+    }
 }
 
 delegate_to_debug!(Symbol, SymbolDef);
@@ -155,10 +175,15 @@ macro_rules! sym {
     ($($i:ident)::+) => {
         const { $crate::ir::symbol::Symbol::new($crate::macros::_core::concat!("" $(, $crate::macros::_core::stringify!($i), )"::"+ ))}
     };
-    ($lit:literal) => {
+    (%$lit:literal) => {
         const {
             let _v: $crate::macros::_core::primitive::u128 = $lit; // Filter out string literals and negative numbers
-            const { $crate::ir::symbol::Symbol::new($crate::macros::_core::stringify!($lit)) }
+            const { $crate::ir::symbol::Symbol::new($crate::macros::_core::concat!("%", $crate::macros::_core::stringify!($lit))) }
+        }
+    };
+    (%$ident:ident) => {
+        const {
+            const { $crate::ir::symbol::Symbol::new($crate::macros::_core::concat!("%", $crate::macros::_core::stringify!($ident))) }
         }
     }
 }

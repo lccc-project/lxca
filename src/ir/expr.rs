@@ -5,6 +5,7 @@ use crate::{
     DebugWithConstants, delegate_to_debug,
     ir::{
         constant::{BoxOrConstant, ConstantPool, Internalizable},
+        intrinsics::Intrinsic,
         metadata::{MetadataBuilder, MetadataIter, NestedMetadata},
         pretty::PrettyPrint,
         symbol::Symbol,
@@ -323,6 +324,14 @@ impl<'ir, 'a> BasicBlockBuilder<'ir, 'a> {
         self
     }
 
+    pub fn statement<F: for<'b> FnOnce(&mut StatementBuilder<'ir, 'b>) -> Statement<'ir>>(
+        &mut self,
+        f: F,
+    ) -> &mut Self {
+        self.stats.push(f(&mut StatementBuilder::new(self.pool)));
+        self
+    }
+
     pub fn finish<
         S: Internalizable<'ir, Symbol>,
         F: for<'b> FnOnce(&mut TermBuilder<'ir, 'b>) -> Terminator<'ir>,
@@ -351,16 +360,22 @@ pub enum ExprBody<'ir> {
     Const(Value<'ir>),
     UnaryOp(UnaryOp, OverflowBehaviour, BoxOrConstant<'ir, Expr<'ir>>),
     BinaryOp(BinaryExpr<'ir>),
+    CompareOp(
+        CompareOp,
+        BoxOrConstant<'ir, Expr<'ir>>,
+        BoxOrConstant<'ir, Expr<'ir>>,
+    ),
     ReadField(
         BoxOrConstant<'ir, Expr<'ir>>,
         Constant<'ir, Type<'ir>>,
-        Constant<'ir, str>,
+        Constant<'ir, Symbol>,
     ),
     ProjectField(
         BoxOrConstant<'ir, Expr<'ir>>,
         Constant<'ir, Type<'ir>>,
-        Constant<'ir, str>,
+        Constant<'ir, Symbol>,
     ),
+    SsaVar(Constant<'ir, Symbol>),
 }
 
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
@@ -420,6 +435,17 @@ impl<'ir> PrettyPrint<'ir> for Expr<'ir> {
                 f.write_str(".")?;
                 field.fmt(f)
             }
+            ExprBody::CompareOp(op, left, right) => {
+                f.write_str("compare ")?;
+                op.fmt(f)?;
+                f.write_str(" ")?;
+                self.ty.fmt(f)?;
+                f.write_str(" ")?;
+                left.fmt(f)?;
+                f.write_str(", ")?;
+                right.fmt(f)
+            }
+            ExprBody::SsaVar(v) => v.fmt(f),
         }
     }
 }
@@ -533,6 +559,11 @@ impl<'ir, 'a> ExprBuilder<'ir, 'a> {
 
         self.finish(ExprBody::BinaryOp(binexpr))
     }
+
+    pub fn ssa_var<S: Internalizable<'ir, Symbol>>(&mut self, sym: S) -> Expr<'ir> {
+        let var = self.pool.intern(sym);
+        self.finish(ExprBody::SsaVar(var))
+    }
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -580,6 +611,31 @@ impl<'ir> PrettyPrint<'ir> for BinaryOp {
 }
 
 delegate_to_debug!(BinaryOp);
+
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
+pub enum CompareOp {
+    Equals,
+    LessThan,
+    GreaterThan,
+    LessEqual,
+    GreaterEqual,
+    NotEqual,
+}
+
+delegate_to_debug!(CompareOp);
+
+impl<'ir> PrettyPrint<'ir> for CompareOp {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        match self {
+            CompareOp::Equals => f.write_str("eq"),
+            CompareOp::LessThan => f.write_str("lt"),
+            CompareOp::GreaterThan => f.write_str("gt"),
+            CompareOp::LessEqual => f.write_str("le"),
+            CompareOp::GreaterEqual => f.write_str("ge"),
+            CompareOp::NotEqual => f.write_str("ne"),
+        }
+    }
+}
 
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
 pub struct BinaryExpr<'ir>(
@@ -699,6 +755,69 @@ impl<'ir> PrettyPrint<'ir> for AssignStatement<'ir> {
     }
 }
 
+pub struct StatementBuilder<'ir, 'a> {
+    pool: &'a mut ConstantPool<'ir>,
+}
+
+impl<'ir, 'a> StatementBuilder<'ir, 'a> {
+    pub(crate) const fn new(pool: &'a mut ConstantPool<'ir>) -> Self {
+        Self { pool }
+    }
+
+    pub fn assign<
+        F: for<'b> FnOnce(&mut AssignStatementBuilder<'ir, 'b>) -> AssignStatement<'ir>,
+    >(
+        &mut self,
+        f: F,
+    ) -> Statement<'ir> {
+        Statement::Assign(f(&mut AssignStatementBuilder::new(self.pool)))
+    }
+}
+
+pub struct AssignStatementBuilder<'ir, 'a> {
+    pool: &'a mut ConstantPool<'ir>,
+    ty: Option<Constant<'ir, Type<'ir>>>,
+}
+
+impl<'ir, 'a> AssignStatementBuilder<'ir, 'a> {
+    pub(crate) const fn new(pool: &'a mut ConstantPool<'ir>) -> Self {
+        Self { pool, ty: None }
+    }
+
+    pub fn assign_type<T: Internalizable<'ir, Type<'ir>>>(&mut self, ty: T) -> &mut Self {
+        self.ty = Some(self.pool.intern(ty));
+
+        self
+    }
+
+    pub fn type_with<F: for<'b> FnOnce(&mut TypeBuilder<'ir, 'b>) -> Type<'ir>>(
+        &mut self,
+        f: F,
+    ) -> &mut Self {
+        let ty = f(&mut TypeBuilder::new(self.pool));
+        self.assign_type(ty)
+    }
+
+    pub fn finish<
+        S: Internalizable<'ir, Symbol>,
+        F: for<'b> FnOnce(&mut ExprBuilder<'ir, 'b>) -> Expr<'ir>,
+    >(
+        &mut self,
+        sym: S,
+        f: F,
+    ) -> AssignStatement<'ir> {
+        let value = f(&mut ExprBuilder::new(self.pool));
+        let ty = self
+            .ty
+            .take()
+            .unwrap_or_else(|| self.pool.intern(value.ty().clone()));
+
+        let id = self.pool.intern(sym);
+
+        AssignStatement { id, ty, value }
+    }
+}
+
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
 pub struct Terminator<'ir> {
     pub meta: MetadataList<'ir>,
@@ -721,6 +840,9 @@ pub enum TerminatorBody<'ir> {
     Tailcall(FunctionCall<'ir>),
     Return(Expr<'ir>),
     ReturnVoid,
+    Branch(Branch<'ir>),
+    CallIntrinsic(CallIntrinsicTerm<'ir>),
+    TailcallIntrinsic(IntrinsicCall<'ir>),
 }
 
 impl<'ir> PrettyPrint<'ir> for TerminatorBody<'ir> {
@@ -746,7 +868,38 @@ impl<'ir> PrettyPrint<'ir> for TerminatorBody<'ir> {
                 expr.fmt(f)
             }
             TerminatorBody::ReturnVoid => f.write_str("return void"),
+            TerminatorBody::Branch(branch) => {
+                f.write_str("branch ")?;
+                branch.fmt(f)
+            }
+            TerminatorBody::CallIntrinsic(call) => {
+                f.write_str("call intrinsic ")?;
+                call.func.fmt(f)?;
+                f.write_str(" next ")?;
+                call.next.fmt(f)
+            }
+            TerminatorBody::TailcallIntrinsic(call) => {
+                f.write_str("tailcall ")?;
+                call.fmt(f)
+            }
         }
+    }
+}
+
+#[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
+pub struct Branch<'ir> {
+    cond: Expr<'ir>,
+    dest: JumpTarget<'ir>,
+    else_dest: JumpTarget<'ir>,
+}
+
+impl<'ir> PrettyPrint<'ir> for Branch<'ir> {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        self.cond.fmt(f)?;
+        f.write_str(" then ")?;
+        self.dest.fmt(f)?;
+        f.write_str(" else ")?;
+        self.else_dest.fmt(f)
     }
 }
 
@@ -819,6 +972,34 @@ impl<'ir, 'a> TermBuilder<'ir, 'a> {
     ) -> Terminator<'ir> {
         let term = f(&mut CallBuilder::new(self.pool));
         self.finish(TerminatorBody::Tailcall(term))
+    }
+
+    pub fn call_intrinsic<
+        F: for<'b> FnOnce(&mut CallBuilder<'ir, 'b>) -> CallIntrinsicTerm<'ir>,
+    >(
+        &mut self,
+        f: F,
+    ) -> Terminator<'ir> {
+        let term = f(&mut CallBuilder::new(self.pool));
+        self.finish(TerminatorBody::CallIntrinsic(term))
+    }
+
+    pub fn tailcall_intrinsic<
+        F: for<'b> FnOnce(&mut CallBuilder<'ir, 'b>) -> IntrinsicCall<'ir>,
+    >(
+        &mut self,
+        f: F,
+    ) -> Terminator<'ir> {
+        let term = f(&mut CallBuilder::new(self.pool));
+        self.finish(TerminatorBody::TailcallIntrinsic(term))
+    }
+
+    pub fn branch<F: for<'b> FnOnce(&mut BranchBuilder<'ir, 'b>) -> Branch<'ir>>(
+        &mut self,
+        f: F,
+    ) -> Terminator<'ir> {
+        let term = f(&mut BranchBuilder::new(self.pool));
+        self.finish(TerminatorBody::Branch(term))
     }
 }
 
@@ -896,11 +1077,56 @@ pub struct CallTerm<'ir> {
 }
 
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
+pub struct CallIntrinsicTerm<'ir> {
+    pub func: IntrinsicCall<'ir>,
+    pub next: JumpTarget<'ir>,
+}
+
+#[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
 pub struct FunctionCall<'ir> {
     pub target: Expr<'ir>,
     pub sig: Signature<'ir>,
     pub call_metadata: MetadataList<'ir>,
     pub params: Vec<Expr<'ir>>,
+}
+
+#[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
+pub struct IntrinsicCall<'ir> {
+    pub target: Intrinsic<'ir>,
+    pub sig: Signature<'ir>,
+    pub call_metadata: MetadataList<'ir>,
+    pub const_params: Vec<Value<'ir>>,
+    pub params: Vec<Expr<'ir>>,
+}
+
+impl<'ir> PrettyPrint<'ir> for IntrinsicCall<'ir> {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        self.sig.fmt(f)?;
+        f.write_str(" ")?;
+        self.call_metadata.fmt(f)?;
+        self.target.fmt(f)?;
+
+        f.write_str("<")?;
+        let mut sep = "";
+
+        for param in &self.const_params {
+            f.write_str(sep)?;
+            sep = ", ";
+            param.fmt(f)?;
+        }
+
+        f.write_str(">")?;
+
+        f.write_str(" (")?;
+        let mut sep = "";
+
+        for arg in &self.params {
+            f.write_str(sep)?;
+            sep = ", ";
+            arg.fmt(f)?;
+        }
+        f.write_str(")")
+    }
 }
 
 impl<'ir> PrettyPrint<'ir> for FunctionCall<'ir> {
@@ -925,6 +1151,7 @@ pub struct CallBuilder<'ir, 'a> {
     pool: &'a mut ConstantPool<'ir>,
     metadata: Vec<Metadata<'ir>>,
     params: Vec<Expr<'ir>>,
+    const_params: Vec<Value<'ir>>,
     sig: Option<Signature<'ir>>,
 }
 
@@ -934,6 +1161,7 @@ impl<'ir, 'a> CallBuilder<'ir, 'a> {
             pool,
             metadata: Vec::new(),
             params: Vec::new(),
+            const_params: Vec::new(),
             sig: None,
         }
     }
@@ -975,6 +1203,15 @@ impl<'ir, 'a> CallBuilder<'ir, 'a> {
         self
     }
 
+    pub fn const_arg<F: for<'b> FnOnce(&mut ValueBuilder<'ir, 'b>) -> Value<'ir>>(
+        &mut self,
+        f: F,
+    ) -> &mut Self {
+        let val = f(&mut ValueBuilder::new(self.pool));
+        self.const_params.push(val);
+        self
+    }
+
     pub fn finish_with_next<
         E: for<'b> FnOnce(&mut ExprBuilder<'ir, 'b>) -> Expr<'ir>,
         J: for<'b> FnOnce(&mut JumpBuilder<'ir, 'b>) -> JumpTarget<'ir>,
@@ -992,10 +1229,27 @@ impl<'ir, 'a> CallBuilder<'ir, 'a> {
         }
     }
 
+    pub fn intrinsic_with_next<J: for<'b> FnOnce(&mut JumpBuilder<'ir, 'b>) -> JumpTarget<'ir>>(
+        &mut self,
+        jump: J,
+        intrin: Intrinsic<'ir>,
+    ) -> CallIntrinsicTerm<'ir> {
+        let jump = jump(&mut JumpBuilder::new(self.pool));
+        let call = self.finish_intrinsic(intrin);
+
+        CallIntrinsicTerm {
+            func: call,
+            next: jump,
+        }
+    }
+
     pub fn finish<E: for<'b> FnOnce(&mut ExprBuilder<'ir, 'b>) -> Expr<'ir>>(
         &mut self,
         target: E,
     ) -> FunctionCall<'ir> {
+        if !self.const_params.is_empty() {
+            panic!("Only intrinsic calls can have const params");
+        }
         let target = target(&mut ExprBuilder::new(self.pool));
 
         let sig = self.sig.take().expect("Signature Must be set");
@@ -1007,6 +1261,69 @@ impl<'ir, 'a> CallBuilder<'ir, 'a> {
             sig,
             call_metadata: metadata,
             params,
+        }
+    }
+
+    pub fn finish_intrinsic(&mut self, target: Intrinsic<'ir>) -> IntrinsicCall<'ir> {
+        let sig = self.sig.take().expect("Signature Must be set");
+        let metadata = MetadataList(core::mem::take(&mut self.metadata));
+        let params = core::mem::take(&mut self.params);
+        let const_params = core::mem::take(&mut self.const_params);
+
+        IntrinsicCall {
+            target,
+            sig,
+            call_metadata: metadata,
+            params,
+            const_params,
+        }
+    }
+}
+
+pub struct BranchBuilder<'ir, 'a> {
+    pool: &'a mut ConstantPool<'ir>,
+    left: Option<JumpTarget<'ir>>,
+    right: Option<JumpTarget<'ir>>,
+}
+
+impl<'ir, 'a> BranchBuilder<'ir, 'a> {
+    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>) -> Self {
+        Self {
+            pool,
+            left: None,
+            right: None,
+        }
+    }
+
+    pub fn then<F: for<'b> FnOnce(&mut JumpBuilder<'ir, 'b>) -> JumpTarget<'ir>>(
+        &mut self,
+        f: F,
+    ) -> &mut Self {
+        self.left = Some(f(&mut JumpBuilder::new(self.pool)));
+        self
+    }
+
+    pub fn else_then<F: for<'b> FnOnce(&mut JumpBuilder<'ir, 'b>) -> JumpTarget<'ir>>(
+        &mut self,
+        f: F,
+    ) -> &mut Self {
+        self.right = Some(f(&mut JumpBuilder::new(self.pool)));
+        self
+    }
+
+    pub fn finish<F: for<'b> FnOnce(&mut ExprBuilder<'ir, 'b>) -> Expr<'ir>>(
+        &mut self,
+        f: F,
+    ) -> Branch<'ir> {
+        let dest = self.left.take().expect("then must be called first");
+        let else_dest = self.right.take().expect("else_then must be called first");
+
+        let cond = f(&mut ExprBuilder::new(self.pool));
+
+        Branch {
+            cond,
+            dest,
+            else_dest,
         }
     }
 }

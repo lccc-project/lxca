@@ -1,21 +1,14 @@
+use lxca::ir::{test_files::TEST_FILES, with_context};
+
 fn main() {
-    lxca::ir::with_context(|ctx| {
-        let file = lxca::ir::test_files::return_42("x86_64-pc-linux-gnu", ctx);
-        println!("{file}");
-    });
+    let target = std::env::var("TEST_TARGET").unwrap_or_else(|_| "x86_64-pc-linux-gnu".to_string());
+    for &(name, test_fn) in TEST_FILES {
+        println!("Test {name}:");
 
-    lxca::ir::with_context(|ctx| {
-        let file = lxca::ir::test_files::hello_world("x86_64-pc-linux-gnu", ctx);
-        println!("{file}");
-    });
+        with_context(|ctx| {
+            let file = test_fn(&target, ctx);
 
-    lxca::ir::with_context(|ctx| {
-        let file = lxca::ir::test_files::addition("x86_64-pc-linux-gnu", ctx);
-        println!("{file}");
-    });
-
-    lxca::ir::with_context(|ctx| {
-        let file = lxca::ir::test_files::infinite_loop("x86_64-pc-linux-gnu", ctx);
-        println!("{file}");
-    });
+            println!("{file}");
+        })
+    }
 }
