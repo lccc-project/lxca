@@ -49,13 +49,36 @@ impl<'ir> Type<'ir> {
     pub fn metadata<'a>(&'a self, pool: &'a ConstantPool<'ir>) -> MetadataIter<'ir, 'a, Self> {
         MetadataIter::new(self, pool)
     }
+
+    pub fn type_eq(&self, other: &Type<'ir>, pool: &ConstantPool<'ir>) -> bool {
+        match (self.body(pool), other.body(pool)) {
+            (TypeBody::Void, TypeBody::Void) => true,
+            (TypeBody::Integer(ity1), TypeBody::Integer(ity2)) => ity1 == ity2,
+            (TypeBody::Char(width1), TypeBody::Char(width2)) => width1 == width2,
+            (TypeBody::Pointer(ptr1), TypeBody::Pointer(ptr2)) => {
+                ptr1.ty(pool).type_eq(ptr2.ty(pool), pool)
+            }
+            (TypeBody::Function(sig1), TypeBody::Function(sig2)) => sig1.sig_eq(sig2, pool),
+            _ => false,
+        }
+    }
+
+    pub fn call_signature<'a>(&'a self, pool: &'a ConstantPool<'ir>) -> Option<&'a Signature<'ir>> {
+        match self.body(pool) {
+            TypeBody::Function(sig) => Some(sig),
+            TypeBody::Pointer(ptr) => match ptr.ty(pool).body(pool) {
+                TypeBody::Function(sig) => Some(sig),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TypeBody<'ir> {
     Interned(Constant<'ir, Type<'ir>>),
-    Named(Constant<'ir, Symbol>),
     Integer(IntType),
     Char(u16),
     Pointer(PointerType<'ir>),
@@ -67,7 +90,6 @@ impl<'ir> PrettyPrint<'ir> for TypeBody<'ir> {
     fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
         match self {
             TypeBody::Interned(ty) => ty.fmt(f),
-            TypeBody::Named(named) => named.fmt(f),
             TypeBody::Integer(int_type) => int_type.fmt(f),
             TypeBody::Char(v) => {
                 f.write_str("char(")?;
@@ -146,11 +168,6 @@ impl<'ir, 'a> TypeBuilder<'ir, 'a> {
     ) -> Type<'ir> {
         let ptr = f(&mut PointerTypeBuilder::new(self.pool));
         self.finish(TypeBody::Pointer(ptr))
-    }
-
-    pub fn named<S: Internalizable<'ir, Symbol>>(&mut self, name: S) -> Type<'ir> {
-        let name = self.pool.intern(name);
-        self.finish(TypeBody::Named(name))
     }
 }
 
@@ -374,6 +391,35 @@ impl<'ir> Signature<'ir> {
                 is_varargs,
             } => (tag, ret_ty, params, *is_varargs),
         }
+    }
+
+    pub fn sig_eq(&self, other: &Signature<'ir>, pool: &ConstantPool<'ir>) -> bool {
+        let (tag1, ret_ty1, params1, is_varargs1) = self.real_body(pool);
+        let (tag2, ret_ty2, params2, is_varargs2) = other.real_body(pool);
+
+        if tag1 != tag2 {
+            return false;
+        }
+
+        if is_varargs1 != is_varargs2 {
+            return false;
+        }
+
+        if params1.len() != params2.len() {
+            return false;
+        }
+
+        if !ret_ty1.get(pool).type_eq(ret_ty2.get(pool), pool) {
+            return false;
+        }
+
+        for (param1, param2) in core::iter::zip(params1, params2) {
+            if !param1.type_eq(param2, pool) {
+                return false;
+            }
+        }
+
+        true
     }
 
     pub fn params<'a>(&'a self, pool: &'a ConstantPool<'ir>) -> &'a [Type<'ir>] {
