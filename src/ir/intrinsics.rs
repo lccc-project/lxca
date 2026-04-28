@@ -1,7 +1,9 @@
+use std::mem::MaybeUninit;
+
 use lxca_derive::DebugWithConstants;
 
 use crate::ir::constant::ConstantPool;
-use crate::ir::expr::Value;
+use crate::ir::expr::{Value, ValueBody};
 use crate::ir::pretty::PrettyPrint;
 
 use crate::ir::types::{Signature, TypeBody};
@@ -21,7 +23,43 @@ pub enum Intrinsic<'ir> {
     Realloc,
     ReallocZeroed,
     ReturnAddress,
+    Memcpy {inline: bool},
+    Memmove {inline: bool},
+    Memcmp {inline: bool},
+    MemcmpEq {inline: bool},
+    Memchr {inline: bool},
+    Memset {inline: bool},
+    Strcpy {inline: bool},
+    Strchr {inline: bool},
+    Strstr {inline: bool},
+    Strcmp {inline: bool},
+    StrcmpEq {inline: bool},
+    Strlen {inline: bool},
 }
+
+fn map_slice_and<'a, const N: usize, T, R, F: FnMut(&'a T) -> R>(arr: &'a [T], mut f: F) -> Option<[R; N]> {
+    if arr.len() != N {
+        return None
+    }
+    let mut ret: MaybeUninit<[R; N]> = MaybeUninit::uninit();
+
+    let ptr = ret.as_mut_ptr().cast::<R>();
+
+    for (i, n) in arr.iter().enumerate() {
+        unsafe {
+            ptr.add(i).write(f(n))
+        }
+    }
+
+    Some(unsafe {ret.assume_init()})
+}
+
+macro_rules! match_params {
+    ($sig:expr => $constants:expr) => {
+        map_slice_and($sig.params($constants), |ty| ty.body($constants))
+    }
+}
+
 
 impl<'ir> Intrinsic<'ir> {
     pub fn check_signature(
@@ -193,6 +231,241 @@ impl<'ir> Intrinsic<'ir> {
                     _ => false,
                 }
             }
+            Self::Memcpy {..} | Self::Memmove {..} => {
+                match cparams {
+                    [] => {}
+                    [volatile] => {
+                        match volatile.ty().body(constants) {
+                            TypeBody::Integer(val) if val.width == 1 => {}
+                            _ => return false
+                        }
+                        match volatile.body(constants) {
+                            ValueBody::Integer(val) if let -1..=1 = val.borrow::<i128>().read(constants) => {}
+                            _ => return false
+                        }
+                    }
+                    _ => return false,
+                }
+                match map_slice_and(sig.params(constants) , |ty| ty.body(constants)){
+                    Some([TypeBody::Pointer(destp), TypeBody::Pointer(srcp), TypeBody::Integer(_)]) => {
+                                if !destp.ty(constants).type_eq(srcp.ty(constants), constants) {
+                                    false
+                                } else {
+                                    match sig.ret_ty(constants).body(constants) {
+                                        TypeBody::Void => true,
+                                        TypeBody::Pointer(ptr) => ptr.ty(constants).type_eq(destp.ty(constants), constants),
+                                        _ => false,
+                                    }
+                                }
+                            }
+                            _ => false,
+                }
+            }
+
+            Self::Memcmp {..} | Self::MemcmpEq {..} => {
+                match cparams {
+                    [] => {}
+                    [volatile] => {
+                        match volatile.ty().body(constants) {
+                            TypeBody::Integer(val) if val.width == 1 => {}
+                            _ => return false
+                        }
+                        match volatile.body(constants) {
+                            ValueBody::Integer(val) if let -1..=1 = val.borrow::<i128>().read(constants) => {}
+                            _ => return false
+                        }
+                    }
+                    _ => return false,
+                }
+
+                match (sig.ret_ty(constants).body(constants), map_slice_and(sig.params(constants), |sig| sig.body(constants))) {
+                    (TypeBody::Integer(retty), Some([TypeBody::Pointer(src1), TypeBody::Pointer(src2), TypeBody::Integer(_)])) => {
+
+                        retty.signed && src1.ty(constants).type_eq(src2.ty(constants), constants)
+                    }
+                    _ => false
+                }
+            }
+
+            Self::Memchr { .. } | Self::Memset { .. } => {
+                match cparams {
+                    [] => {}
+                    [volatile] => {
+                        match volatile.ty().body(constants) {
+                            TypeBody::Integer(val) if val.width == 1 => {}
+                            _ => return false
+                        }
+                        match volatile.body(constants) {
+                            ValueBody::Integer(val) if let -1..=1 = val.borrow::<i128>().read(constants) => {}
+                            _ => return false
+                        }
+                    }
+                    _ => return false,
+                }
+
+                match match_params!(sig => constants) {
+                    Some([TypeBody::Pointer(src), TypeBody::Integer(_), TypeBody::Integer(_)]) => {
+                        match sig.ret_ty(constants).body(constants) {
+                            TypeBody::Pointer(ret) => ret.ty(constants).type_eq(src.ty(constants), constants),
+                            TypeBody::Void => matches!(self, Self::Memset { .. }),
+                            _ => false,
+                        }
+                    }
+
+                    _ => false
+                }
+            }
+
+            Self::Strcpy { .. } => {
+                match cparams {
+                    [] => {}
+                    [volatile] => {
+                        match volatile.ty().body(constants) {
+                            TypeBody::Integer(val) if val.width == 1 => {}
+                            _ => return false
+                        }
+                        match volatile.body(constants) {
+                            ValueBody::Integer(val) if let -1..=1 = val.borrow::<i128>().read(constants) => {}
+                            _ => return false
+                        }
+                    }
+                    _ => return false,
+                }
+
+                match (match_params!(sig => constants), match_params!(sig => constants)) {
+                    | (Some([TypeBody::Pointer(dest), TypeBody::Pointer(src)]), None) 
+                    | (None, Some([TypeBody::Pointer(dest), TypeBody::Pointer(src), TypeBody::Integer(_)])) => {
+                        match dest.ty(constants).body(constants) {
+                            TypeBody::Char(_) => {
+                                match sig.ret_ty(constants).body(constants) {
+                                    TypeBody::Pointer(retty) => dest.ty(constants).type_eq(retty.ty(constants), constants) 
+                                        && dest.ty(constants).type_eq(src.ty(constants), constants),
+                                    TypeBody::Void => dest.ty(constants).type_eq(src.ty(constants), constants),
+                                    _ => false,
+                                }
+                            }
+                            _ => false
+                        }
+                    }
+                    _ => false
+                }
+            }
+            Self::Strcmp { .. } | Self::StrcmpEq { .. } => {
+                match cparams {
+                    [] => {}
+                    [volatile] => {
+                        match volatile.ty().body(constants) {
+                            TypeBody::Integer(val) if val.width == 1 => {}
+                            _ => return false
+                        }
+                        match volatile.body(constants) {
+                            ValueBody::Integer(val) if let -1..=1 = val.borrow::<i128>().read(constants) => {}
+                            _ => return false
+                        }
+                    }
+                    _ => return false,
+                }
+
+                match (match_params!(sig => constants), match_params!(sig => constants)) {
+                    | (Some([TypeBody::Pointer(dest), TypeBody::Pointer(src)]), None) 
+                    | (None, Some([TypeBody::Pointer(dest), TypeBody::Pointer(src), TypeBody::Integer(_)])) => {
+                        match dest.ty(constants).body(constants) {
+                            TypeBody::Char(_) => {
+                                match sig.ret_ty(constants).body(constants) {
+                                    TypeBody::Integer(ity) => ity.signed && dest.ty(constants).type_eq(src.ty(constants), constants),
+                                    _ => false,
+                                }
+                            }
+                            _ => false
+                        }
+                    }
+                    _ => false
+                }
+            }
+
+            Self::Strlen { .. } => {
+                match cparams {
+                    [] => {}
+                    [volatile] => {
+                        match volatile.ty().body(constants) {
+                            TypeBody::Integer(val) if val.width == 1 => {}
+                            _ => return false
+                        }
+                        match volatile.body(constants) {
+                            ValueBody::Integer(val) if let -1..=1 = val.borrow::<i128>().read(constants) => {}
+                            _ => return false
+                        }
+                    }
+                    _ => return false,
+                }
+
+                match (sig.ret_ty(constants).body(constants), match_params!(sig => constants), match_params!(sig => constants)) {
+                    | (TypeBody::Integer(_), Some([TypeBody::Pointer(dest)]), None) 
+                    | (TypeBody::Integer(_), None, Some([TypeBody::Pointer(dest), TypeBody::Integer(_)])) => {
+                        match dest.ty(constants).body(constants) {
+                            TypeBody::Char(_) => true,
+                            _ => false,
+                        }
+                    }
+                    _ => false,
+                }
+            }
+
+            Self::Strchr { .. } => {
+                match cparams {
+                    [] => {}
+                    [volatile] => {
+                        match volatile.ty().body(constants) {
+                            TypeBody::Integer(val) if val.width == 1 => {}
+                            _ => return false
+                        }
+                        match volatile.body(constants) {
+                            ValueBody::Integer(val) if let -1..=1 = val.borrow::<i128>().read(constants) => {}
+                            _ => return false
+                        }
+                    }
+                    _ => return false,
+                }
+
+                match (sig.ret_ty(constants).body(constants), match_params!(sig => constants), match_params!(sig => constants)) {
+                    | (TypeBody::Pointer(retty), Some([TypeBody::Pointer(src), TypeBody::Char(cbits)]), None)
+                    | (TypeBody::Pointer(retty), None, Some([TypeBody::Pointer(src), TypeBody::Char(cbits), TypeBody::Integer(_)])) => {
+                        match src.ty(constants).body(constants) {
+                            TypeBody::Char(srcbits) => cbits == srcbits && src.ty(constants).type_eq(retty.ty(constants), constants),
+                            _ => false
+                        }
+                    }
+                    _ => false
+                }
+            }
+
+            Self::Strstr { .. } => {
+                match cparams {
+                    [] => {}
+                    [volatile] => {
+                        match volatile.ty().body(constants) {
+                            TypeBody::Integer(val) if val.width == 1 => {}
+                            _ => return false
+                        }
+                        match volatile.body(constants) {
+                            ValueBody::Integer(val) if let -1..=1 = val.borrow::<i128>().read(constants) => {}
+                            _ => return false
+                        }
+                    }
+                    _ => return false,
+                }
+
+                match (sig.ret_ty(constants).body(constants), match_params!(sig => constants), match_params!(sig => constants)) {
+                    | (TypeBody::Pointer(retty), Some([TypeBody::Pointer(src), TypeBody::Pointer(pat)]), None)
+                    | (TypeBody::Pointer(retty), None, Some([TypeBody::Pointer(src), TypeBody::Pointer(pat), TypeBody::Integer(_)])) => {
+                        match src.ty(constants).body(constants) {
+                            TypeBody::Char(_) => src.ty(constants).type_eq(pat.ty(constants), constants) && src.ty(constants).type_eq(retty.ty(constants), constants),
+                            _ => false
+                        }
+                    }
+                    _ => false
+                }
+            }
         }
     }
 }
@@ -216,6 +489,30 @@ impl<'ir> PrettyPrint<'ir> for Intrinsic<'ir> {
             Intrinsic::ReallocZeroed => f.write_str("lxca::generic::alloc::realloc_zeroed"),
             Intrinsic::Dealloc => f.write_str("lxca::generic::alloc::dealloc"),
             Intrinsic::ReturnAddress => f.write_str("lxca::generic::debug::return_address"),
+            Intrinsic::Memcpy {inline: false} => f.write_str("lxca::generic::mem::memcpy"),
+            Intrinsic::Memmove {inline: false} => f.write_str("lxca::generic::mem::memmove"),
+            Intrinsic::Memcmp {inline: false} => f.write_str("lxca::generic::mem::memcmp"),
+            Intrinsic::MemcmpEq {inline: false} => f.write_str("lxca::generic::mem::memcmpeq"),
+            Intrinsic::Memchr { inline: false } => f.write_str("lxca::generic::mem::memchr"),
+            Intrinsic::Memset { inline: false } => f.write_str("lxca::generic::mem::memchr"),
+            Intrinsic::Memcpy {inline: true} => f.write_str("lxca::generic::mem::inline::memcpy"),
+            Intrinsic::Memmove {inline: true} => f.write_str("lxca::generic::mem::inline::memmove"),
+            Intrinsic::Memcmp {inline: true} => f.write_str("lxca::generic::mem::inline::memcmp"),
+            Intrinsic::MemcmpEq {inline: true} => f.write_str("lxca::generic::mem::inline::memcmpeq"),
+            Intrinsic::Memchr { inline: true } => f.write_str("lxca::generic::mem::inline::memchr"),
+            Intrinsic::Memset { inline: true } => f.write_str("lxca::generic::mem::inline::memchr"),
+            Intrinsic::Strcpy { inline: false } => f.write_str("lxca::generic::mem::strcpy"),
+            Intrinsic::Strchr { inline: false } => f.write_str("lxca::generic::mem::strchr"),
+            Intrinsic::Strstr { inline: false } => f.write_str("lxca::generic::mem::strstr"),
+            Intrinsic::Strcmp { inline: false } => f.write_str("lxca::generic::mem::strcmp"),
+            Intrinsic::StrcmpEq { inline: false } => f.write_str("lxca::generic::mem::strcmpeq"),
+            Intrinsic::Strlen { inline: false } => f.write_str("lxca::generic::mem::strlen"),
+            Intrinsic::Strcpy { inline: true } => f.write_str("lxca::generic::mem::inline::strcpy"),
+            Intrinsic::Strchr { inline: true } => f.write_str("lxca::generic::mem::inline::strchr"),
+            Intrinsic::Strstr { inline: true } => f.write_str("lxca::generic::mem::inline::strstr"),
+            Intrinsic::Strcmp { inline: true } => f.write_str("lxca::generic::mem::inline::strcmp"),
+            Intrinsic::StrcmpEq { inline: true } => f.write_str("lxca::generic::mem::inline::strcmpeq"),
+            Intrinsic::Strlen { inline: true } => f.write_str("lxca::generic::mem::inline::strlen"),
         }
     }
 }

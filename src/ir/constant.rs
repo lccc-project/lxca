@@ -108,7 +108,8 @@ where
 impl<'ir, T: ?Sized> Constant<'ir, T> {
     pub const fn borrow<R: ?Sized>(&self) -> Constant<'ir, R>
     where
-        T: Borrow<R>,
+        T: BorrowConstant<'ir, Constant = R::Constant>,
+        R: BorrowConstant<'ir>
     {
         Constant(self.0, PhantomData, self.2)
     }
