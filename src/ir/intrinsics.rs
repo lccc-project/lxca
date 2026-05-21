@@ -489,30 +489,40 @@ impl<'ir> PrettyPrint<'ir> for Intrinsic<'ir> {
             Intrinsic::ReallocZeroed => f.write_str("lxca::generic::alloc::realloc_zeroed"),
             Intrinsic::Dealloc => f.write_str("lxca::generic::alloc::dealloc"),
             Intrinsic::ReturnAddress => f.write_str("lxca::generic::debug::return_address"),
-            Intrinsic::Memcpy {inline: false} => f.write_str("lxca::generic::mem::memcpy"),
-            Intrinsic::Memmove {inline: false} => f.write_str("lxca::generic::mem::memmove"),
-            Intrinsic::Memcmp {inline: false} => f.write_str("lxca::generic::mem::memcmp"),
-            Intrinsic::MemcmpEq {inline: false} => f.write_str("lxca::generic::mem::memcmpeq"),
-            Intrinsic::Memchr { inline: false } => f.write_str("lxca::generic::mem::memchr"),
-            Intrinsic::Memset { inline: false } => f.write_str("lxca::generic::mem::memchr"),
-            Intrinsic::Memcpy {inline: true} => f.write_str("lxca::generic::mem::inline::memcpy"),
-            Intrinsic::Memmove {inline: true} => f.write_str("lxca::generic::mem::inline::memmove"),
-            Intrinsic::Memcmp {inline: true} => f.write_str("lxca::generic::mem::inline::memcmp"),
-            Intrinsic::MemcmpEq {inline: true} => f.write_str("lxca::generic::mem::inline::memcmpeq"),
-            Intrinsic::Memchr { inline: true } => f.write_str("lxca::generic::mem::inline::memchr"),
-            Intrinsic::Memset { inline: true } => f.write_str("lxca::generic::mem::inline::memchr"),
-            Intrinsic::Strcpy { inline: false } => f.write_str("lxca::generic::mem::strcpy"),
-            Intrinsic::Strchr { inline: false } => f.write_str("lxca::generic::mem::strchr"),
-            Intrinsic::Strstr { inline: false } => f.write_str("lxca::generic::mem::strstr"),
-            Intrinsic::Strcmp { inline: false } => f.write_str("lxca::generic::mem::strcmp"),
-            Intrinsic::StrcmpEq { inline: false } => f.write_str("lxca::generic::mem::strcmpeq"),
-            Intrinsic::Strlen { inline: false } => f.write_str("lxca::generic::mem::strlen"),
-            Intrinsic::Strcpy { inline: true } => f.write_str("lxca::generic::mem::inline::strcpy"),
-            Intrinsic::Strchr { inline: true } => f.write_str("lxca::generic::mem::inline::strchr"),
-            Intrinsic::Strstr { inline: true } => f.write_str("lxca::generic::mem::inline::strstr"),
-            Intrinsic::Strcmp { inline: true } => f.write_str("lxca::generic::mem::inline::strcmp"),
-            Intrinsic::StrcmpEq { inline: true } => f.write_str("lxca::generic::mem::inline::strcmpeq"),
-            Intrinsic::Strlen { inline: true } => f.write_str("lxca::generic::mem::inline::strlen"),
+            Intrinsic::Memcpy {inline} |
+            Intrinsic::Memmove {inline} |
+            Intrinsic::Memcmp {inline} |
+            Intrinsic::MemcmpEq { inline } |
+            Intrinsic::Memchr { inline } |
+            Intrinsic::Memset { inline } |
+            Intrinsic::Strcpy { inline } |
+            Intrinsic::Strchr { inline } |
+            Intrinsic::Strstr { inline } |
+            Intrinsic::Strcmp { inline } |
+            Intrinsic::StrcmpEq { inline } |
+            Intrinsic::Strlen {inline} => {
+                f.write_str("lxca::generic::mem::")?;
+
+                if *inline {
+                    f.write_str("inline::")?;
+                }
+
+                match self {
+                    Intrinsic::Memcpy {..} => f.write_str("memcpy"),
+                    Intrinsic::Memmove { .. } =>  f.write_str("memmove"),
+                    Intrinsic::Memcmp { .. } =>  f.write_str("memcmp"),
+                    Intrinsic::MemcmpEq { .. } =>  f.write_str("memcmpeq"),
+                    Intrinsic::Memchr { .. } =>  f.write_str("memchr"),
+                    Intrinsic::Memset { .. } =>  f.write_str("memset"),
+                    Intrinsic::Strcpy { .. } =>  f.write_str("strcpy"),
+                    Intrinsic::Strchr { .. } =>  f.write_str("strchr"),
+                    Intrinsic::Strstr { .. } =>  f.write_str("strstr"),
+                    Intrinsic::Strcmp { .. } =>  f.write_str("strcmp"),
+                    Intrinsic::StrcmpEq { .. } =>  f.write_str("strcmpeq"),
+                    Intrinsic::Strlen { .. } =>  f.write_str("strlen"),
+                    _ => unreachable!()
+                }
+            },
         }
     }
 }

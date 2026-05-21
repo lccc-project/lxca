@@ -35,7 +35,7 @@ macro_rules! delegate_to_display {
     ($($ty:ty),*) => {
         $(
             impl<'ir> PrettyPrint<'ir> for $ty {
-                fn fmt(&self, __f: &mut PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+                fn fmt(&self, __f: &mut $crate::ir::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
                     core::fmt::Display::fmt(self, __f)
                 }
             }

@@ -7,7 +7,7 @@ use crate::{
         constant::{BoxOrConstant, ConstantPool, Internalizable},
         intrinsics::Intrinsic,
         metadata::{MetadataBuilder, MetadataIter, NestedMetadata},
-        pretty::PrettyPrint,
+        pretty::{PrettyPrint, delegate_to_display},
         symbol::Symbol,
         types::{IntType, Signature, SignatureBuilder, TypeBuilder},
     },
@@ -353,29 +353,108 @@ impl<'ir, 'a> BasicBlockBuilder<'ir, 'a> {
     }
 }
 
+#[bitfield_struct::bitfield(u16, hash = true)]
+#[derive(PartialEq, Eq)]
+pub struct AccessClass {
+    pub atomic: bool,
+    pub acquire: bool,
+    pub release: bool,
+    pub seq_cst: bool,
+
+    #[bits(2)]
+    _pad1: u16,
+    pub freeze: bool,
+    pub non_temporal: bool,
+    #[bits(8)]
+    __: u16,
+}
+
+delegate_to_debug!(AccessClass);
+delegate_to_display!(AccessClass);
+
+impl core::fmt::Display for AccessClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.atomic() {
+            f.write_str("atomic ")?;
+            let mut sep = "";
+            if self.acquire() {
+                f.write_str("acq")?;
+                sep = " ";
+            }
+
+            if self.release() {
+                f.write_str("rel")?;
+                sep = " ";
+            }
+
+            f.write_str(sep)?;
+
+            if self.seq_cst() {
+                f.write_str("seqcst ")?;
+            }
+        }
+
+        if self.freeze() {
+            f.write_str("freeze ")?;
+        }
+        
+        if self.non_temporal() {
+            f.write_str("nontemporal ")?;
+        }
+        Ok(())
+    }
+}
+
+
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExprBody<'ir> {
     Interned(Constant<'ir, Expr<'ir>>),
-    Const(Value<'ir>),
-    UnaryOp(UnaryOp, OverflowBehaviour, BoxOrConstant<'ir, Expr<'ir>>),
+    UnaryOp(UnaryOp, OverflowBehaviour, SimpleExpr<'ir>),
     BinaryOp(BinaryExpr<'ir>),
     CompareOp(
         CompareOp,
-        BoxOrConstant<'ir, Expr<'ir>>,
-        BoxOrConstant<'ir, Expr<'ir>>,
+        SimpleExpr<'ir>,
+        SimpleExpr<'ir>,
     ),
     ReadField(
-        BoxOrConstant<'ir, Expr<'ir>>,
+        SimpleExpr<'ir>,
         Constant<'ir, Type<'ir>>,
         Constant<'ir, Symbol>,
     ),
     ProjectField(
-        BoxOrConstant<'ir, Expr<'ir>>,
+        SimpleExpr<'ir>,
         Constant<'ir, Type<'ir>>,
         Constant<'ir, Symbol>,
     ),
+    Freeze(SimpleExpr<'ir>),
+    Read(AccessClass, SimpleExpr<'ir>),
+    Simple(SimpleExpr<'ir>),
+}
+
+#[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SimpleExprBody<'ir> {
+    Const(Value<'ir>),
     SsaVar(Constant<'ir, Symbol>),
+}
+
+impl<'ir> PrettyPrint<'ir> for SimpleExpr<'ir> {
+    fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
+        self.meta.fmt(f)?;
+        match &self.body {
+            SimpleExprBody::Const(value) => {
+                f.write_str("const ")?;
+                value.fmt(f)
+            },
+            SimpleExprBody::SsaVar(var) => {
+                f.write_str("var ")?;
+                self.ty.fmt(f)?;
+                f.write_str(" ")?;
+                var.fmt(f)
+            },
+        }
+    }
 }
 
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
@@ -385,16 +464,56 @@ pub struct Expr<'ir> {
     body: ExprBody<'ir>,
 }
 
+#[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
+pub struct SimpleExpr<'ir> {
+    ty: Type<'ir>,
+    meta: MetadataList<'ir>,
+    body: SimpleExprBody<'ir>,
+}
+
+impl<'ir> NestedMetadata<'ir> for SimpleExpr<'ir> {
+    fn list_metadata(&self) -> &MetadataList<'ir> {
+        &self.meta
+    }
+
+    fn next<'a>(&'a self, _: &'a ConstantPool<'ir>) -> Option<&'a Self> {
+        None
+    }
+}
+
+impl<'ir> SimpleExpr<'ir> {
+    pub fn list_metadata<'a>(&'a self, pool: &'a ConstantPool<'ir>) ->  MetadataIter<'ir, 'a, Self>{
+        MetadataIter::new(self, pool)
+    }
+
+    pub fn ty(&self) -> &Type<'ir> {
+        &self.ty
+    }
+
+    pub fn body<'a>(&'a self) -> &'a SimpleExprBody<'ir> {
+        &self.body
+    }
+}
+
+impl<'ir> From<SimpleExpr<'ir>> for Expr<'ir> {
+    fn from(mut value: SimpleExpr<'ir>) -> Self {
+        let meta = core::mem::take(&mut value.meta);
+        let ty = value.ty.clone();
+
+        Expr {
+            ty,
+            meta,
+            body: ExprBody::Simple(value)
+        }
+    }
+}
+
 impl<'ir> PrettyPrint<'ir> for Expr<'ir> {
     fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
         self.meta.fmt(f)?;
 
         match &self.body {
             ExprBody::Interned(constant) => constant.fmt(f),
-            ExprBody::Const(value) => {
-                f.write_str("const ")?;
-                value.fmt(f)
-            }
             ExprBody::UnaryOp(op, overflow, val) => {
                 op.fmt(f)?;
                 f.write_str(" ")?;
@@ -445,7 +564,19 @@ impl<'ir> PrettyPrint<'ir> for Expr<'ir> {
                 f.write_str(", ")?;
                 right.fmt(f)
             }
-            ExprBody::SsaVar(v) => v.fmt(f),
+            ExprBody::Freeze(inner) => {
+                f.write_str("freeze ")?;
+                inner.fmt(f)
+            }
+            ExprBody::Read(class, pointer) => {
+                f.write_str("read ")?;
+                self.ty.fmt(f)?;
+                f.write_str(" ")?;
+                class.fmt(f)?;
+                f.write_str("*")?;
+                pointer.fmt(f)
+            }
+            ExprBody::Simple(simple) => simple.fmt(f)
         }
     }
 }
@@ -530,10 +661,22 @@ impl<'ir, 'a> ExprBuilder<'ir, 'a> {
         }
     }
 
-    pub fn value<F: for<'b> FnOnce(&mut ValueBuilder<'ir, 'b>) -> Value<'ir>>(
+    fn finish_simple(&mut self, body: SimpleExprBody<'ir>) -> SimpleExpr<'ir> {
+        let ty = self.ty.take().expect("Type must be set");
+
+        let metadata = MetadataList(core::mem::take(&mut self.metadata));
+
+        SimpleExpr {
+            ty,
+            meta: metadata,
+            body,
+        }
+    }
+
+    pub fn value<S, F: for<'b> FnOnce(&mut ValueBuilder<'ir, 'b>) -> Value<'ir>>(
         &mut self,
         f: F,
-    ) -> Expr<'ir> {
+    ) -> S where SimpleExpr<'ir>: Into<S> {
         let mut value = f(&mut ValueBuilder::new(self.pool));
 
         if self.ty.is_none() {
@@ -544,10 +687,10 @@ impl<'ir, 'a> ExprBuilder<'ir, 'a> {
             self.ty = Some(Type::intern(ty));
         }
 
-        self.finish(ExprBody::Const(value))
+        self.finish_simple(SimpleExprBody::Const(value)).into()
     }
 
-    pub fn const_int<I: Internalizable<'ir, u128>>(&mut self, ity: IntType, val: I) -> Expr<'ir> {
+    pub fn const_int<S, I: Internalizable<'ir, u128>>(&mut self, ity: IntType, val: I) -> S where SimpleExpr<'ir>: Into<S> {
         self.value(move |builder| builder.with_ty(|builder| builder.int_type(ity)).int(val))
     }
 
@@ -560,9 +703,9 @@ impl<'ir, 'a> ExprBuilder<'ir, 'a> {
         self.finish(ExprBody::BinaryOp(binexpr))
     }
 
-    pub fn ssa_var<S: Internalizable<'ir, Symbol>>(&mut self, sym: S) -> Expr<'ir> {
+    pub fn ssa_var<R, S: Internalizable<'ir, Symbol>>(&mut self, sym: S) -> R where SimpleExpr<'ir>: Into<R> {
         let var = self.pool.intern(sym);
-        self.finish(ExprBody::SsaVar(var))
+        self.finish_simple(SimpleExprBody::SsaVar(var)).into()
     }
 }
 
@@ -641,15 +784,15 @@ impl<'ir> PrettyPrint<'ir> for CompareOp {
 pub struct BinaryExpr<'ir>(
     pub BinaryOp,
     pub OverflowBehaviour,
-    pub BoxOrConstant<'ir, Expr<'ir>>,
-    pub BoxOrConstant<'ir, Expr<'ir>>,
+    pub SimpleExpr<'ir>,
+    pub SimpleExpr<'ir>,
 );
 
 pub struct BinaryOpBuilder<'ir, 'a> {
     pool: &'a mut ConstantPool<'ir>,
     overflow: OverflowBehaviour,
-    left: Option<BoxOrConstant<'ir, Expr<'ir>>>,
-    right: Option<BoxOrConstant<'ir, Expr<'ir>>>,
+    left: Option<SimpleExpr<'ir>>,
+    right: Option<SimpleExpr<'ir>>,
 }
 
 impl<'ir, 'a> BinaryOpBuilder<'ir, 'a> {
@@ -662,33 +805,21 @@ impl<'ir, 'a> BinaryOpBuilder<'ir, 'a> {
         }
     }
 
-    pub fn left<E: Internalizable<'ir, Expr<'ir>>>(&mut self, left: E) -> &mut Self {
-        let left = self.pool.intern(left);
-        self.left = Some(BoxOrConstant::Interned(left));
-        self
-    }
-
-    pub fn right<E: Internalizable<'ir, Expr<'ir>>>(&mut self, right: E) -> &mut Self {
-        let right = self.pool.intern(right);
-        self.right = Some(BoxOrConstant::Interned(right));
-        self
-    }
-
-    pub fn left_with<F: for<'b> FnOnce(&mut ExprBuilder<'ir, 'b>) -> Expr<'ir>>(
+    pub fn left_with<F: for<'b> FnOnce(&mut ExprBuilder<'ir, 'b>) -> SimpleExpr<'ir>>(
         &mut self,
         f: F,
     ) -> &mut Self {
         let left = f(&mut ExprBuilder::new(self.pool));
-        self.left = Some(BoxOrConstant::Boxed(Box::new(left)));
+        self.left = Some(left);
         self
     }
 
-    pub fn right_with<F: for<'b> FnOnce(&mut ExprBuilder<'ir, 'b>) -> Expr<'ir>>(
+    pub fn right_with<F: for<'b> FnOnce(&mut ExprBuilder<'ir, 'b>) -> SimpleExpr<'ir>>(
         &mut self,
         f: F,
     ) -> &mut Self {
         let right = f(&mut ExprBuilder::new(self.pool));
-        self.right = Some(BoxOrConstant::Boxed(Box::new(right)));
+        self.right = Some(right);
         self
     }
 

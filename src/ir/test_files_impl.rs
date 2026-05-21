@@ -10,6 +10,7 @@ use crate::{
     sym,
 };
 
+
 pub fn return_42<'ir>(targ: impl Internalizable<'ir, str>, ctx: IrCtx<'ir>) -> File<'ir> {
     ctx.build_file(|builder| {
         builder.declare(|f| {

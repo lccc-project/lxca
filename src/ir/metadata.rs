@@ -20,7 +20,7 @@ use crate::{
 
 use super::constant::{BorrowConstant, Constant};
 
-#[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
+#[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq, Default)]
 pub struct MetadataList<'ir>(pub(crate) Vec<Metadata<'ir>>);
 
 impl<'ir> super::pretty::PrettyPrint<'ir> for MetadataList<'ir> {
