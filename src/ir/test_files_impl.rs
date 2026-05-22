@@ -17,7 +17,7 @@ pub fn return_42<'ir>(targ: impl Internalizable<'ir, str>, ctx: IrCtx<'ir>) -> F
             f.function(sym!(return_42), |f| {
                 f.build_signature(|f| f.finish(Type::int(32)));
                 f.build_basic_block(|bb| {
-                    bb.finish(sym!(%0), |term| {
+                    bb.finish(sym!(@0), |term| {
                         term.return_val(|expr| expr.const_int(IntType::int(32), 42u128))
                     })
                 });
@@ -44,7 +44,7 @@ pub fn hello_world<'ir>(targ: impl Internalizable<'ir, str>, ctx: IrCtx<'ir>) ->
                     .function(sym!(main), |f| {
                         f.build_signature(|sig| sig.finish(Type::int(32)))
                             .build_basic_block(|bb| {
-                                bb.finish(sym!(%0), |term| {
+                                bb.finish(sym!(@0), |term| {
                                     term.call(|call| {
                                         call.arg(|expr| {
                                             expr.value(|v| {
@@ -53,7 +53,7 @@ pub fn hello_world<'ir>(targ: impl Internalizable<'ir, str>, ctx: IrCtx<'ir>) ->
                                         })
                                         .signature(puts_sig)
                                         .finish_with_next(
-                                            |jump| jump.arg(sym!(#return)).finish(sym!(%1)),
+                                            |jump| jump.arg(sym!(#return)).finish(sym!(@1)),
                                             |expr| {
                                                 expr.value(|f| {
                                                     f.global_address(
@@ -71,7 +71,7 @@ pub fn hello_world<'ir>(targ: impl Internalizable<'ir, str>, ctx: IrCtx<'ir>) ->
                                 })
                             })
                             .build_basic_block(|bb| {
-                                bb.param(sym!(%0), Type::int(32)).finish(sym!(%1), |term| {
+                                bb.param(sym!(@1), Type::int(32)).finish(sym!(%1), |term| {
                                     term.return_val(|expr| expr.const_int(IntType::int(32), 0u128))
                                 })
                             })
@@ -88,7 +88,7 @@ pub fn addition<'ir>(targ: impl Internalizable<'ir, str>, ctx: IrCtx<'ir>) -> Fi
             f.function(sym!(addition), |f| {
                 f.build_signature(|f| f.finish(Type::int(32)));
                 f.build_basic_block(|bb| {
-                    bb.finish(sym!(%0), |term| {
+                    bb.finish(sym!(@0), |term| {
                         term.return_val(|expr| {
                             expr.ty(Type::int(32)).binop(|bin| {
                                 bin.left_with(|expr| expr.const_int(IntType::int(32), 42u128))
@@ -113,7 +113,7 @@ pub fn infinite_loop<'ir>(targ: impl Internalizable<'ir, str>, ctx: IrCtx<'ir>) 
                 f.function(sym!(infinite_loop), |f| {
                     f.build_signature(|f| f.finish(Type::void()))
                         .build_basic_block(|bb| {
-                            bb.finish(sym!(%0), |term| term.jump(|jmp| jmp.finish(sym!(%0))))
+                            bb.finish(sym!(@0), |term| term.jump(|jmp| jmp.finish(sym!(@0))))
                         })
                         .finish()
                 })
@@ -134,21 +134,21 @@ pub fn black_box<'ir>(targ: impl Internalizable<'ir, str>, ctx: IrCtx<'ir>) -> F
                                     v.finish(sym!(%1), |e| e.const_int(IntType::uint(32), 0u128))
                                 })
                             })
-                            .finish(sym!(%0), |f| {
+                            .finish(sym!(@0), |f| {
                                 f.call_intrinsic(|f| {
-                                    f.arg(|f| f.ty(Type::uint(32)).ssa_var(sym!(%1)))
+                                    f.arg(|f| f.ty(Type::uint(32)).ssa_var(sym!(%0)))
                                         .signature_with(|sig| {
                                             sig.param(Type::uint(32)).finish(Type::uint(32))
                                         })
                                         .intrinsic_with_next(
-                                            |j| j.arg(sym!(#return)).finish(sym!(%2)),
+                                            |j| j.arg(sym!(#return)).finish(sym!(@1)),
                                             Intrinsic::BlackBox,
                                         )
                                 })
                             })
                         })
                         .build_basic_block(|bb| {
-                            bb.param(sym!(%3), Type::uint(32)).finish(sym!(%2), |f| {
+                            bb.param(sym!(%1), Type::uint(32)).finish(sym!(@1), |f| {
                                 f.return_val(|expr| expr.ty(Type::uint(32)).ssa_var(sym!(%3)))
                             })
                         })

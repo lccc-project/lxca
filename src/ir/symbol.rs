@@ -185,5 +185,16 @@ macro_rules! sym {
         const {
             const { $crate::ir::symbol::Symbol::new($crate::macros::_core::concat!("%", $crate::macros::_core::stringify!($ident))) }
         }
-    }
+    };
+    (@$lit:literal) => {
+        const {
+            let _v: $crate::macros::_core::primitive::u128 = $lit; // Filter out string literals and negative numbers
+            const { $crate::ir::symbol::Symbol::new($crate::macros::_core::concat!("@", $crate::macros::_core::stringify!($lit))) }
+        }
+    };
+    (@$ident:ident) => {
+        const {
+            const { $crate::ir::symbol::Symbol::new($crate::macros::_core::concat!("@", $crate::macros::_core::stringify!($ident))) }
+        }
+    };
 }
