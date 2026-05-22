@@ -131,7 +131,7 @@ pub fn black_box<'ir>(targ: impl Internalizable<'ir, str>, ctx: IrCtx<'ir>) -> F
                         .build_basic_block(|b| {
                             b.statement(|v| {
                                 v.assign(|v| {
-                                    v.finish(sym!(%1), |e| e.const_int(IntType::uint(32), 0u128))
+                                    v.finish(sym!(%0), |e| e.const_int(IntType::uint(32), 0u128))
                                 })
                             })
                             .finish(sym!(@0), |f| {
