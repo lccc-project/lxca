@@ -1,11 +1,7 @@
 use super::IrCtx;
 use crate::{
     ir::{
-        constant::{Constant, Internalizable},
-        expr::BinaryOp,
-        file::File,
-        intrinsics::Intrinsic,
-        types::{IntType, Signature, Type},
+        constant::{Constant, Internalizable}, expr::BinaryOp, file::File, intrinsics::Intrinsic, symbol::{InternalizeAsSym, VarSym}, types::{IntType, Signature, Type}
     },
     sym,
 };
@@ -71,7 +67,7 @@ pub fn hello_world<'ir>(targ: impl Internalizable<'ir, str>, ctx: IrCtx<'ir>) ->
                                 })
                             })
                             .build_basic_block(|bb| {
-                                bb.param(sym!(@1), Type::int(32)).finish(sym!(%1), |term| {
+                                bb.param(sym!(%1), Type::int(32)).finish(sym!(@1), |term| {
                                     term.return_val(|expr| expr.const_int(IntType::int(32), 0u128))
                                 })
                             })
@@ -173,3 +169,4 @@ pub const TEST_FILES: &[(
     &'static str,
     for<'a, 'ir> fn(target: &'a str, ctx: IrCtx<'ir>) -> File<'ir>,
 )] = test_list![hello_world, return_42, addition, infinite_loop, black_box];
+

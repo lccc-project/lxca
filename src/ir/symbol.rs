@@ -3,9 +3,35 @@ use std::{
     ops::Deref,
 };
 
-use crate::{delegate_to_debug, ir::constant::ConstantPoolEntry};
+use crate::{delegate_to_debug, ir::constant::{BorrowConstant, BoxOrConstant, Constant, ConstantAs, ConstantPoolEntry, Internalizable}};
 
-use super::constant::{BorrowConstant, ConstantAs};
+
+pub trait SymbolTypeMatch<S: ?Sized>{}
+
+impl SymbolTypeMatch<Symbol> for Symbol {}
+
+impl SymbolTypeMatch<Symbol> for SymbolDef {}
+
+impl SymbolTypeMatch<SymbolDef> for Symbol {}
+
+impl<'ir, S: ?Sized, T: SymbolTypeMatch<S> + ?Sized> SymbolTypeMatch<Constant<'ir, S>> for T{}
+impl<'ir, S: ?Sized, T: SymbolTypeMatch<S> + ?Sized> SymbolTypeMatch<BoxOrConstant<'ir, S>> for T{}
+impl<'a, S: ?Sized, T: SymbolTypeMatch<S> + ?Sized> SymbolTypeMatch<&'a S> for T{}
+impl<'a, S: ?Sized + ToOwned, T: SymbolTypeMatch<S> + ?Sized> SymbolTypeMatch<Cow<'a, S>> for T{}
+impl<'a, S: ?Sized, T: SymbolTypeMatch<S> + ?Sized> SymbolTypeMatch<&'a mut S> for T{}
+impl<S: ?Sized, T: SymbolTypeMatch<S> + ?Sized> SymbolTypeMatch<Box<S>> for T{}
+
+mod private {
+    pub trait Sealed<S: ?Sized> {}
+}
+
+use private::Sealed;
+
+pub trait InternalizeAsSym<'ir, S: ?Sized + BorrowConstant<'ir>>: Internalizable<'ir, S> + Sealed<S>{}
+
+impl<S: ?Sized, R: ?Sized> Sealed<S> for R where S: SymbolTypeMatch<R>{}
+
+impl<'ir, S: ?Sized + BorrowConstant<'ir>, R: Sealed<S> + Internalizable<'ir, S>> InternalizeAsSym<'ir, S> for R {}
 
 #[derive(Clone, Hash, PartialEq, Eq)]
 pub struct SymbolDef(String);
@@ -98,6 +124,88 @@ impl Symbol {
     }
 }
 
+macro_rules! sym_wrapper {
+    ($id:ident) => {
+        #[derive(Hash, PartialEq, Eq)]
+        pub struct $id(Symbol);
+
+        impl core::fmt::Debug for $id {
+            fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+                self.0.fmt(f)
+            }
+        }
+        impl core::fmt::Display for $id {
+            fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+                self.0.fmt(f)
+            }
+        }
+
+        impl $id {
+            pub const fn new(st: &str) -> &Self {
+                unsafe { &*(st as *const str as *const Self)}
+            }
+
+            pub const fn as_str(&self) -> &str {
+                self.0.as_str()
+            }
+
+            pub const fn as_symbol(&self) -> &Symbol {
+                &self.0
+            }
+
+            pub fn into_def(&self) -> SymbolDef {
+                self.0.into_def()
+            }
+        }
+
+        impl<'ir> BorrowConstant<'ir> for $id {
+            type Constant = SymbolDef;
+        }
+
+        impl<'a, 'ir> ConstantAs<'a, 'ir> for &'a $id {
+            fn read_as(val: &'a Self::Constant) -> Self {
+                $id::new(&val.0)
+            }
+        }
+
+        impl<'ir> From<&$id> for SymbolDef {
+            fn from(value: &$id) -> Self {
+                value.into_def()
+            }
+        }
+
+        impl<'ir> From<&$id> for ConstantPoolEntry<'ir> {
+            fn from(value: &$id) -> Self {
+                ConstantPoolEntry::Symbol(value.into_def())
+            }
+        }
+
+        impl PartialEq<$id> for SymbolDef {
+            fn eq(&self, other: &$id) -> bool {
+                self.as_symbol() == other.as_symbol()
+            }
+        }
+
+        impl PartialEq<&$id> for SymbolDef {
+            fn eq(&self, other: &&$id) -> bool {
+                self.as_symbol() == other.as_symbol()
+            }
+        }
+
+        impl SymbolTypeMatch<$id> for $id{}
+        impl SymbolTypeMatch<$id> for Symbol {}
+        impl SymbolTypeMatch<$id> for SymbolDef {}
+
+        impl SymbolTypeMatch<SymbolDef> for $id {}
+
+        delegate_to_debug!($id);
+        crate::ir::pretty::delegate_to_display!($id);
+    };
+}
+
+sym_wrapper!(VarSym);
+sym_wrapper!(LabelSym);
+
 pub struct Components<'a>(core::str::Split<'a, &'static str>);
 
 impl<'a> Iterator for Components<'a> {
@@ -170,7 +278,7 @@ impl<'ir> From<Box<Symbol>> for ConstantPoolEntry<'ir> {
 #[macro_export]
 macro_rules! sym {
     (# $ident:ident) => {
-        const { $crate::ir::symbol::Symbol::new($crate::macros::_core::concat!("#", $crate::macros::_core::stringify!($ident))) }
+        const { $crate::ir::symbol::VarSym::new($crate::macros::_core::concat!("#", $crate::macros::_core::stringify!($ident))) }
     };
     ($($i:ident)::+) => {
         const { $crate::ir::symbol::Symbol::new($crate::macros::_core::concat!("" $(, $crate::macros::_core::stringify!($i), )"::"+ ))}
@@ -178,23 +286,23 @@ macro_rules! sym {
     (%$lit:literal) => {
         const {
             let _v: $crate::macros::_core::primitive::u128 = $lit; // Filter out string literals and negative numbers
-            const { $crate::ir::symbol::Symbol::new($crate::macros::_core::concat!("%", $crate::macros::_core::stringify!($lit))) }
+            const { $crate::ir::symbol::VarSym::new($crate::macros::_core::concat!("%", $crate::macros::_core::stringify!($lit))) }
         }
     };
     (%$ident:ident) => {
         const {
-            const { $crate::ir::symbol::Symbol::new($crate::macros::_core::concat!("%", $crate::macros::_core::stringify!($ident))) }
+            const { $crate::ir::symbol::VarSym::new($crate::macros::_core::concat!("%", $crate::macros::_core::stringify!($ident))) }
         }
     };
     (@$lit:literal) => {
         const {
             let _v: $crate::macros::_core::primitive::u128 = $lit; // Filter out string literals and negative numbers
-            const { $crate::ir::symbol::Symbol::new($crate::macros::_core::concat!("@", $crate::macros::_core::stringify!($lit))) }
+            const { $crate::ir::symbol::LabelSym::new($crate::macros::_core::concat!("@", $crate::macros::_core::stringify!($lit))) }
         }
     };
     (@$ident:ident) => {
         const {
-            const { $crate::ir::symbol::Symbol::new($crate::macros::_core::concat!("@", $crate::macros::_core::stringify!($ident))) }
+            const { $crate::ir::symbol::LabelSym::new($crate::macros::_core::concat!("@", $crate::macros::_core::stringify!($ident))) }
         }
     };
 }

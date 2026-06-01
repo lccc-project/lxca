@@ -3,11 +3,7 @@ use lxca_derive::DebugWithConstants;
 use crate::{
     delegate_to_debug,
     ir::{
-        constant::{ConstantPool, Internalizable},
-        expr::BasicBlockBuilder,
-        metadata::{Metadata, MetadataBuilder, MetadataIter, NestedMetadata},
-        pretty::{PrettyPrint, delegate_to_display},
-        types::SignatureBuilder,
+        constant::{ConstantPool, Internalizable}, expr::BasicBlockBuilder, metadata::{Metadata, MetadataBuilder, MetadataIter, NestedMetadata}, pretty::{PrettyPrint, delegate_to_display}, symbol::{InternalizeAsSym, VarSym}, types::SignatureBuilder
     },
 };
 
@@ -208,7 +204,7 @@ pub struct FunctionBody<'ir> {
     ty: Signature<'ir>,
     function_metadata: MetadataList<'ir>,
     body: Option<Vec<BasicBlock<'ir>>>,
-    param_names: Option<Vec<Constant<'ir, Symbol>>>,
+    param_names: Option<Vec<Constant<'ir, VarSym>>>,
 }
 
 impl<'ir> NestedMetadata<'ir> for FunctionBody<'ir> {
@@ -216,7 +212,7 @@ impl<'ir> NestedMetadata<'ir> for FunctionBody<'ir> {
         &self.function_metadata
     }
 
-    fn next<'a>(&'a self, cp: &'a ConstantPool<'ir>) -> Option<&'a Self> {
+    fn next<'a>(&'a self, _: &'a ConstantPool<'ir>) -> Option<&'a Self> {
         None
     }
 }
@@ -238,7 +234,7 @@ impl<'ir> FunctionBody<'ir> {
         MetadataIter::new(self, pool)
     }
 
-    pub fn param_names(&self) -> &[Constant<'ir, Symbol>] {
+    pub fn param_names(&self) -> &[Constant<'ir, VarSym>] {
         self.param_names.as_deref().unwrap_or(const { &[] })
     }
 }
@@ -248,7 +244,7 @@ pub struct FunctionBodyBuilder<'ir, 'a> {
     sig: Option<Signature<'ir>>,
     body: Option<Vec<BasicBlock<'ir>>>,
     metadata: Vec<Metadata<'ir>>,
-    param_names: Option<Vec<Constant<'ir, Symbol>>>,
+    param_names: Option<Vec<Constant<'ir, VarSym>>>,
 }
 
 impl<'ir, 'a> FunctionBodyBuilder<'ir, 'a> {
@@ -274,8 +270,9 @@ impl<'ir, 'a> FunctionBodyBuilder<'ir, 'a> {
         }
     }
 
-    pub fn with_param_name(&mut self, name: Constant<'ir, Symbol>) -> &mut Self {
-        self.param_names.get_or_insert_with(Vec::new).push(name);
+    pub fn with_param_name<S: InternalizeAsSym<'ir, VarSym>>(&mut self, name: S) -> &mut Self {
+        let sym = self.pool.intern(name);
+        self.param_names.get_or_insert_with(Vec::new).push(sym);
         self
     }
 
@@ -320,6 +317,30 @@ pub struct ObjectBody<'ir> {
     ty: Type<'ir>,
     object_metadata: MetadataList<'ir>,
     initializer: Option<Initializer<'ir>>,
+}
+
+impl<'ir> NestedMetadata<'ir> for ObjectBody<'ir> {
+    fn list_metadata(&self) -> &MetadataList<'ir> {
+        &self.object_metadata
+    }
+
+    fn next<'a>(&'a self, _: &'a ConstantPool<'ir>) -> Option<&'a Self> {
+        None
+    }
+}
+
+impl<'ir> ObjectBody<'ir> {
+    pub fn list_metadata<'a>(&'a self, pool: &'a ConstantPool<'ir>) -> MetadataIter<'ir, 'a, Self> {
+        MetadataIter::new(self, pool)
+    }
+
+    pub fn ty(&self) -> &Type<'ir> {
+        &self.ty
+    }
+
+    pub fn initializer(&self) -> Option<&Initializer<'ir>> {
+        self.initializer.as_ref()
+    }
 }
 
 pub struct ObjectBodyBuilder<'ir, 'a> {

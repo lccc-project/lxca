@@ -34,7 +34,7 @@ impl_smart_ptr!(for<T: ?Sized> Rc<T>);
 macro_rules! delegate_to_display {
     ($($ty:ty),*) => {
         $(
-            impl<'ir> PrettyPrint<'ir> for $ty {
+            impl<'ir> $crate::ir::pretty::PrettyPrint<'ir> for $ty {
                 fn fmt(&self, __f: &mut $crate::ir::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
                     core::fmt::Display::fmt(self, __f)
                 }

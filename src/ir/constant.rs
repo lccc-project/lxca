@@ -678,6 +678,8 @@ mod private {
 
 use private::Insertable;
 
+pub trait InsertFrom<'ir, C>{}
+
 pub trait Internalizable<'ir, C: BorrowConstant<'ir> + ?Sized>:
     Insertable<'ir, Constant = C::Constant>
 {

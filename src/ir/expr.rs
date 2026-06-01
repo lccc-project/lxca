@@ -8,7 +8,7 @@ use crate::{
         intrinsics::Intrinsic,
         metadata::{MetadataBuilder, MetadataIter, NestedMetadata},
         pretty::{PrettyPrint, delegate_to_display},
-        symbol::Symbol,
+        symbol::{InternalizeAsSym, LabelSym, Symbol, SymbolTypeMatch, VarSym},
         types::{IntType, Signature, SignatureBuilder, TypeBuilder},
     },
 };
@@ -436,7 +436,7 @@ pub enum ExprBody<'ir> {
 #[non_exhaustive]
 pub enum SimpleExprBody<'ir> {
     Const(Value<'ir>),
-    SsaVar(Constant<'ir, Symbol>),
+    SsaVar(Constant<'ir, VarSym>),
 }
 
 impl<'ir> PrettyPrint<'ir> for SimpleExpr<'ir> {
@@ -703,7 +703,7 @@ impl<'ir, 'a> ExprBuilder<'ir, 'a> {
         self.finish(ExprBody::BinaryOp(binexpr))
     }
 
-    pub fn ssa_var<R, S: Internalizable<'ir, Symbol>>(&mut self, sym: S) -> R where SimpleExpr<'ir>: Into<R> {
+    pub fn ssa_var<R, S: InternalizeAsSym<'ir, VarSym>>(&mut self, sym: S) -> R where SimpleExpr<'ir>: Into<R> {
         let var = self.pool.intern(sym);
         self.finish_simple(SimpleExprBody::SsaVar(var)).into()
     }
@@ -869,7 +869,7 @@ impl<'ir> PrettyPrint<'ir> for Statement<'ir> {
 
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
 pub struct AssignStatement<'ir> {
-    pub id: Constant<'ir, Symbol>,
+    pub id: Constant<'ir, VarSym>,
     pub ty: Constant<'ir, Type<'ir>>,
     pub value: Expr<'ir>,
 }
@@ -930,7 +930,7 @@ impl<'ir, 'a> AssignStatementBuilder<'ir, 'a> {
     }
 
     pub fn finish<
-        S: Internalizable<'ir, Symbol>,
+        S: InternalizeAsSym<'ir, VarSym>,
         F: for<'b> FnOnce(&mut ExprBuilder<'ir, 'b>) -> Expr<'ir>,
     >(
         &mut self,
@@ -1136,9 +1136,9 @@ impl<'ir, 'a> TermBuilder<'ir, 'a> {
 
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
 pub struct JumpTarget<'ir> {
-    pub target: Constant<'ir, Symbol>,
+    pub target: Constant<'ir, LabelSym>,
     pub metadata: MetadataList<'ir>,
-    pub args: Vec<Constant<'ir, Symbol>>,
+    pub args: Vec<Constant<'ir, VarSym>>,
 }
 
 impl<'ir> PrettyPrint<'ir> for JumpTarget<'ir> {
@@ -1161,7 +1161,7 @@ impl<'ir> PrettyPrint<'ir> for JumpTarget<'ir> {
 pub struct JumpBuilder<'ir, 'a> {
     pool: &'a mut ConstantPool<'ir>,
     metadata: Vec<Metadata<'ir>>,
-    args: Vec<Constant<'ir, Symbol>>,
+    args: Vec<Constant<'ir, VarSym>>,
 }
 
 impl<'ir, 'a> JumpBuilder<'ir, 'a> {
@@ -1182,7 +1182,7 @@ impl<'ir, 'a> JumpBuilder<'ir, 'a> {
         self
     }
 
-    pub fn finish<S: Internalizable<'ir, Symbol>>(&mut self, targ: S) -> JumpTarget<'ir> {
+    pub fn finish<S: InternalizeAsSym<'ir, LabelSym>>(&mut self, targ: S) -> JumpTarget<'ir> {
         let name = self.pool.intern(targ);
         let metadata = MetadataList(core::mem::take(&mut self.metadata));
         let args = core::mem::take(&mut self.args);
@@ -1194,7 +1194,7 @@ impl<'ir, 'a> JumpBuilder<'ir, 'a> {
         }
     }
 
-    pub fn arg<S: Internalizable<'ir, Symbol>>(&mut self, var: S) -> &mut Self {
+    pub fn arg<S: InternalizeAsSym<'ir, VarSym>>(&mut self, var: S) -> &mut Self {
         let var = self.pool.intern(var);
         self.args.push(var);
         self
