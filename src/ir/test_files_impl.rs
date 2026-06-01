@@ -145,7 +145,7 @@ pub fn black_box<'ir>(targ: impl Internalizable<'ir, str>, ctx: IrCtx<'ir>) -> F
                         })
                         .build_basic_block(|bb| {
                             bb.param(sym!(%1), Type::uint(32)).finish(sym!(@1), |f| {
-                                f.return_val(|expr| expr.ty(Type::uint(32)).ssa_var(sym!(%3)))
+                                f.return_val(|expr| expr.ty(Type::uint(32)).ssa_var(sym!(%1)))
                             })
                         })
                         .finish()
