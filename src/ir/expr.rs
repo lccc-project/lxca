@@ -221,8 +221,8 @@ delegate_to_debug!(PadFill);
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
 pub struct BasicBlock<'ir> {
     bb_metadata: MetadataList<'ir>,
-    label: Constant<'ir, Symbol>,
-    params: Vec<(Constant<'ir, Symbol>, Type<'ir>)>,
+    label: Constant<'ir, LabelSym>,
+    params: Vec<(Constant<'ir, VarSym>, Type<'ir>)>,
     stats: Vec<Statement<'ir>>,
     term: Terminator<'ir>,
 }
@@ -283,11 +283,11 @@ impl<'ir> BasicBlock<'ir> {
         &self.term
     }
 
-    pub fn label(&self) -> Constant<'ir, Symbol> {
+    pub fn label(&self) -> Constant<'ir, LabelSym> {
         self.label
     }
 
-    pub fn params(&self) -> &[(Constant<'ir, Symbol>, Type<'ir>)] {
+    pub fn params(&self) -> &[(Constant<'ir, VarSym>, Type<'ir>)] {
         &self.params
     }
 }
@@ -295,7 +295,7 @@ impl<'ir> BasicBlock<'ir> {
 pub struct BasicBlockBuilder<'ir, 'b> {
     pool: &'b mut ConstantPool<'ir>,
     metadata: Vec<Metadata<'ir>>,
-    params: Vec<(Constant<'ir, Symbol>, Type<'ir>)>,
+    params: Vec<(Constant<'ir, VarSym>, Type<'ir>)>,
     stats: Vec<Statement<'ir>>,
 }
 
@@ -318,7 +318,7 @@ impl<'ir, 'a> BasicBlockBuilder<'ir, 'a> {
         self
     }
 
-    pub fn param<S: Internalizable<'ir, Symbol>>(&mut self, name: S, ty: Type<'ir>) -> &mut Self {
+    pub fn param<S: InternalizeAsSym<'ir, VarSym>>(&mut self, name: S, ty: Type<'ir>) -> &mut Self {
         let name = self.pool.intern(name);
         self.params.push((name, ty));
         self
@@ -333,7 +333,7 @@ impl<'ir, 'a> BasicBlockBuilder<'ir, 'a> {
     }
 
     pub fn finish<
-        S: Internalizable<'ir, Symbol>,
+        S: InternalizeAsSym<'ir, LabelSym>,
         F: for<'b> FnOnce(&mut TermBuilder<'ir, 'b>) -> Terminator<'ir>,
     >(
         &mut self,
