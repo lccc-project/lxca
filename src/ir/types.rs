@@ -1,12 +1,8 @@
 use lxca_derive::DebugWithConstants;
 
 use crate::{
-    delegate_to_debug,
-    ir::{
-        constant::{ConstantPool, Internalizable},
-        metadata::{Metadata, MetadataBuilder, MetadataIter, MetadataList, NestedMetadata},
-        pretty::PrettyPrint,
-        symbol::Symbol,
+    delegate_to_debug, ir::{
+        constant::{ConstantPool, Internalizable}, decls::DeclScopeId, metadata::{Metadata, MetadataBuilder, MetadataIter, MetadataList, NestedMetadata}, pretty::PrettyPrint, symbol::Symbol,
     },
 };
 
@@ -123,7 +119,7 @@ impl<'ir, 'a> TypeBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> &mut Self {
-        let meta = f(&mut MetadataBuilder::new(self.pool));
+        let meta = f(&mut MetadataBuilder::new(self.pool, None));
         self.metadata.push(meta);
         self
     }
@@ -466,7 +462,7 @@ impl<'ir, 'a> SignatureBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> &mut Self {
-        let meta = f(&mut MetadataBuilder::new(self.pool));
+        let meta = f(&mut MetadataBuilder::new(self.pool, None));
         self.metadata.push(meta);
         self
     }

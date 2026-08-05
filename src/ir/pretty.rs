@@ -7,8 +7,7 @@ use std::{
 use uuid::Uuid;
 
 use crate::ir::{
-    constant::ConstantPool,
-    symbol::{Symbol, SymbolDef},
+    constant::ConstantPool, symbol::{LabelSym, Symbol, SymbolDef, VarSym},
 };
 
 pub trait PrettyPrint<'ir> {
@@ -115,4 +114,27 @@ impl<'a, 'fmt, 'ir> PrettyPrinter<'a, 'fmt, 'ir> {
             tab_level: 0,
         }
     }
+}
+
+pub fn display_list<I: IntoIterator>(list: I, f: &mut core::fmt::Formatter, sep: &str) -> core::fmt::Result where I::Item: core::fmt::Display {
+    use core::fmt::Display as _;
+    let mut rsep = "";
+    for item in list {
+        f.write_str(rsep)?;
+        rsep = sep;
+        item.fmt(f)?;
+    }
+
+    Ok(())
+}
+
+pub fn pretty_print_list<'ir, I: IntoIterator>(list: I, f: &mut PrettyPrinter<'_, '_, 'ir>, sep: &str) -> core::fmt::Result where I::Item: PrettyPrint<'ir> {
+    let mut rsep = "";
+    for item in list {
+        f.write_str(rsep)?;
+        rsep = sep;
+        item.fmt(f)?;
+    }
+
+    Ok(())
 }

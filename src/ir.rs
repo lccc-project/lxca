@@ -70,6 +70,9 @@ pub mod metadata;
 pub mod pretty;
 pub mod symbol;
 pub mod types;
+pub mod asm;
+
+pub mod verifier;
 
 pub mod intrinsics;
 

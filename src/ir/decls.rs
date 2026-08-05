@@ -1,9 +1,10 @@
+use std::num::NonZero;
+
 use lxca_derive::DebugWithConstants;
 
 use crate::{
-    delegate_to_debug,
-    ir::{
-        constant::{ConstantPool, Internalizable}, expr::BasicBlockBuilder, metadata::{Metadata, MetadataBuilder, MetadataIter, NestedMetadata}, pretty::{PrettyPrint, delegate_to_display}, symbol::{InternalizeAsSym, VarSym}, types::SignatureBuilder
+    delegate_to_debug, ir::{
+        asm::{InlineAssembly, InlineAssemblyBuilder}, constant::{ConstantPool, Internalizable}, expr::BasicBlockBuilder, metadata::{Metadata, MetadataBuilder, MetadataIter, NestedMetadata}, pretty::{PrettyPrint, delegate_to_display}, symbol::{InternalizeAsSym, VarSym}, types::SignatureBuilder
     },
 };
 
@@ -15,6 +16,10 @@ use super::{
     symbol::Symbol,
     types::{Signature, Type},
 };
+
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, DebugWithConstants)]
+pub struct DeclScopeId<'ir>(pub(crate) NonZero<u32>, pub(crate) PhantomIrMarker<'ir>);
+
 
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub enum Linkage {
@@ -42,6 +47,7 @@ pub struct Declaration<'ir> {
     metadata: MetadataList<'ir>,
     linkage: Linkage,
     name: Constant<'ir, Symbol>,
+    scope_id: DeclScopeId<'ir>,
     body: DeclarationBody<'ir>,
 }
 
@@ -80,15 +86,27 @@ impl<'ir> PrettyPrint<'ir> for Declaration<'ir> {
                 function_body.ty.fmt(f)?;
 
                 match &function_body.body {
-                    Some(bbs) => {
-                        f.write_str("{\n")?;
-                        let mut pretty = f.nest();
-                        for bb in bbs {
-                            bb.fmt(&mut pretty)?;
-                            pretty.write_str("\n")?;
+                    Some(body) => {
+                        match body {
+                            FunctionBodyInner::Lxca(bbs) => {
+                                f.write_str("{\n")?;
+                                let mut pretty = f.nest();
+                                for bb in bbs {
+                                    bb.fmt(&mut pretty)?;
+                                    pretty.write_str("\n")?;
+                                }
+                                f.write_tabs()?;
+                                f.write_str("}\n")
+                            },
+                            FunctionBodyInner::Naked(asm) => {
+                                f.write_str(" = naked {\n")?;
+                                let mut pretty = f.nest();
+                                asm.fmt(&mut pretty)?;
+                                pretty.write_str("\n")?;
+                                f.write_tabs()?;
+                                f.write_str("}\n")
+                            },
                         }
-                        f.write_tabs()?;
-                        f.write_str("}\n")
                     }
                     None => f.write_str(";\n"),
                 }
@@ -126,14 +144,16 @@ impl<'ir> Declaration<'ir> {
 
 pub struct DeclBuilder<'ir, 'a> {
     pool: &'a mut ConstantPool<'ir>,
+    scope: DeclScopeId<'ir>,
     linkage: Linkage,
     metadata: Vec<Metadata<'ir>>,
 }
 
 impl<'ir, 'a> DeclBuilder<'ir, 'a> {
-    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>) -> Self {
+    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>, scope: DeclScopeId<'ir>) -> Self {
         Self {
             pool,
+            scope,
             linkage: Linkage::Internal,
             metadata: Vec::new(),
         }
@@ -149,6 +169,7 @@ impl<'ir, 'a> DeclBuilder<'ir, 'a> {
             linkage: self.linkage,
             name,
             body,
+            scope_id: self.scope,
         }
     }
 
@@ -156,7 +177,7 @@ impl<'ir, 'a> DeclBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> &mut Self {
-        let meta = f(&mut MetadataBuilder::new(self.pool));
+        let meta = f(&mut MetadataBuilder::new(self.pool, Some(self.scope)));
         self.metadata.push(meta);
         self
     }
@@ -187,7 +208,7 @@ impl<'ir, 'a> DeclBuilder<'ir, 'a> {
         name: S,
         f: F,
     ) -> Declaration<'ir> {
-        let body = f(&mut FunctionBodyBuilder::new(self.pool));
+        let body = f(&mut FunctionBodyBuilder::new(self.pool, self.scope));
         let name = self.pool.intern(name);
         self.finish(name, DeclarationBody::Function(body))
     }
@@ -200,10 +221,16 @@ pub enum DeclarationBody<'ir> {
 }
 
 #[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
+pub enum FunctionBodyInner<'ir> {
+    Lxca(Vec<BasicBlock<'ir>>),
+    Naked(InlineAssembly<'ir>),
+}
+
+#[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
 pub struct FunctionBody<'ir> {
     ty: Signature<'ir>,
     function_metadata: MetadataList<'ir>,
-    body: Option<Vec<BasicBlock<'ir>>>,
+    body: Option<FunctionBodyInner<'ir>>,
     param_names: Option<Vec<Constant<'ir, VarSym>>>,
 }
 
@@ -222,8 +249,8 @@ impl<'ir> FunctionBody<'ir> {
         self.body.is_none()
     }
 
-    pub fn body(&self) -> Option<&[BasicBlock<'ir>]> {
-        self.body.as_deref()
+    pub fn body(&self) -> Option<&FunctionBodyInner<'ir>> {
+        self.body.as_ref()
     }
 
     pub fn signature(&self) -> &Signature<'ir> {
@@ -245,16 +272,35 @@ pub struct FunctionBodyBuilder<'ir, 'a> {
     body: Option<Vec<BasicBlock<'ir>>>,
     metadata: Vec<Metadata<'ir>>,
     param_names: Option<Vec<Constant<'ir, VarSym>>>,
+    scope_id: DeclScopeId<'ir>,
 }
 
 impl<'ir, 'a> FunctionBodyBuilder<'ir, 'a> {
-    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>) -> Self {
+    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>, scope_id: DeclScopeId<'ir>) -> Self {
         Self {
             pool,
             sig: None,
             body: None,
             metadata: Vec::new(),
             param_names: None,
+            scope_id,
+        }
+    }
+
+    pub fn finish_naked<F: for<'b> FnOnce(&mut InlineAssemblyBuilder<'ir, 'b>) -> InlineAssembly<'ir>>(&mut self, f: F) -> FunctionBody<'ir> {
+        let sig = self.sig.take().expect("Must set signature first");
+        if self.body.is_some() {
+            panic!("Cannot make a naked function with an lxca body")
+        }
+        let metadata = core::mem::take(&mut self.metadata);
+
+        let body = f(&mut InlineAssemblyBuilder::new(self.pool, Some(self.scope_id)));
+
+        FunctionBody {
+            ty: sig,
+            function_metadata: MetadataList(metadata), 
+            body: Some(FunctionBodyInner::Naked(body)),
+            param_names: self.param_names.take(),
         }
     }
 
@@ -264,7 +310,7 @@ impl<'ir, 'a> FunctionBodyBuilder<'ir, 'a> {
         let metadata = core::mem::take(&mut self.metadata);
         FunctionBody {
             ty: sig,
-            body,
+            body: body.map(FunctionBodyInner::Lxca),
             function_metadata: MetadataList(metadata),
             param_names: self.param_names.take(),
         }
@@ -280,7 +326,7 @@ impl<'ir, 'a> FunctionBodyBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> &mut Self {
-        let meta = f(&mut MetadataBuilder::new(self.pool));
+        let meta = f(&mut MetadataBuilder::new(self.pool, Some(self.scope_id)));
         self.metadata.push(meta);
         self
     }
@@ -305,7 +351,7 @@ impl<'ir, 'a> FunctionBodyBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> &mut Self {
-        let bb = f(&mut BasicBlockBuilder::new(self.pool));
+        let bb = f(&mut BasicBlockBuilder::new(self.pool, self.scope_id));
 
         self.body.get_or_insert_with(Vec::new).push(bb);
         self

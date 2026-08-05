@@ -8,14 +8,9 @@ use std::{
 };
 
 use crate::{
-    delegate_to_debug,
-    fmt_helpers::DebugWithConstants,
-    ir::{
-        constant::{ConstantPool, Internalizable},
-        pretty,
-        symbol::Symbol,
-    },
-    traits::DynHash,
+    delegate_to_debug, fmt_helpers::DebugWithConstants, ir::{
+        constant::{ConstantPool, Internalizable}, decls::DeclScopeId, pretty, symbol::Symbol,
+    }, traits::DynHash,
 };
 
 use super::constant::{BorrowConstant, Constant};
@@ -151,7 +146,7 @@ pub enum MetadataValue<'ir> {
     String(Constant<'ir, str>),
     Symbol(Constant<'ir, Symbol>),
     Integer(Constant<'ir, u128>),
-    Label(Constant<'ir, Symbol>),
+    Label(Constant<'ir, Symbol>, DeclScopeId<'ir>),
 }
 
 impl<'ir> pretty::PrettyPrint<'ir> for MetadataValue<'ir> {
@@ -170,7 +165,7 @@ impl<'ir> pretty::PrettyPrint<'ir> for MetadataValue<'ir> {
             MetadataValue::String(constant) => super::pretty::PrettyPrint::fmt(constant, f),
             MetadataValue::Symbol(constant) => super::pretty::PrettyPrint::fmt(constant, f),
             MetadataValue::Integer(constant) => super::pretty::PrettyPrint::fmt(constant, f),
-            MetadataValue::Label(constant) => {
+            MetadataValue::Label(constant, _) => {
                 f.write_str("local ")?;
                 super::pretty::PrettyPrint::fmt(constant, f)
             }
@@ -313,13 +308,15 @@ impl<'ir> core::cmp::Eq for dyn DynMetadataTarget<'ir> {}
 pub struct MetadataListBuilder<'ir, 'a> {
     pool: &'a mut ConstantPool<'ir>,
     entries: Vec<Metadata<'ir>>,
+    scope_id: Option<DeclScopeId<'ir>>,
 }
 
 impl<'ir, 'a> MetadataListBuilder<'ir, 'a> {
-    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>) -> Self {
+    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>, scope_id: Option<DeclScopeId<'ir>>,) -> Self {
         Self {
             pool,
             entries: Vec::new(),
+            scope_id,
         }
     }
 
@@ -331,7 +328,7 @@ impl<'ir, 'a> MetadataListBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> &mut Self {
-        self.entries.push(f(&mut MetadataBuilder::new(self.pool)));
+        self.entries.push(f(&mut MetadataBuilder::new(self.pool, self.scope_id)));
         self
     }
 
@@ -372,13 +369,15 @@ impl<'ir, 'a> MetadataListBuilder<'ir, 'a> {
 pub struct MetadataBuilder<'ir, 'a> {
     pool: &'a mut ConstantPool<'ir>,
     flags: MetadataFlags,
+    scope_id: Option<DeclScopeId<'ir>>,
 }
 
 impl<'a, 'ir> MetadataBuilder<'ir, 'a> {
-    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>) -> Self {
+    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>, scope_id: Option<DeclScopeId<'ir>>) -> Self {
         Self {
             pool,
             flags: MetadataFlags::empty(),
+            scope_id,
         }
     }
 
@@ -406,7 +405,7 @@ impl<'a, 'ir> MetadataBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> Metadata<'ir> {
-        let body = f(&mut MetadataListBuilder::new(self.pool));
+        let body = f(&mut MetadataListBuilder::new(self.pool, self.scope_id));
         let entry = self.pool.intern(body);
 
         self.finish(MetadataBody::Interned(entry))
@@ -427,7 +426,7 @@ impl<'a, 'ir> MetadataBuilder<'ir, 'a> {
         name: S,
         value: F,
     ) -> Metadata<'ir> {
-        let value = value(&mut MetadataValueBuilder::new(self.pool));
+        let value = value(&mut MetadataValueBuilder::new(self.pool, self.scope_id));
         let name = self.pool.intern(name);
 
         self.finish(MetadataBody::KeyValue { key: name, value })
@@ -436,11 +435,12 @@ impl<'a, 'ir> MetadataBuilder<'ir, 'a> {
 
 pub struct MetadataValueBuilder<'ir, 'a> {
     pool: &'a mut ConstantPool<'ir>,
+    scope: Option<DeclScopeId<'ir>>,
 }
 
 impl<'ir, 'a> MetadataValueBuilder<'ir, 'a> {
-    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>) -> Self {
-        Self { pool }
+    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>, scope: Option<DeclScopeId<'ir>>) -> Self {
+        Self { pool, scope }
     }
 
     pub fn int<I: Internalizable<'ir, u128>>(&mut self, val: I) -> MetadataValue<'ir> {
@@ -456,7 +456,8 @@ impl<'ir, 'a> MetadataValueBuilder<'ir, 'a> {
     }
 
     pub fn label<S: Internalizable<'ir, Symbol>>(&mut self, label: S) -> MetadataValue<'ir> {
-        MetadataValue::Label(self.pool.intern(label))
+        let scope = self.scope.expect("Cannot reference a label from global context");
+        MetadataValue::Label(self.pool.intern(label), scope)
     }
 
     pub fn body<
@@ -466,7 +467,7 @@ impl<'ir, 'a> MetadataValueBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> MetadataValue<'ir> {
-        let body = f(&mut MetadataListBuilder::new(self.pool));
+        let body = f(&mut MetadataListBuilder::new(self.pool, self.scope));
         MetadataValue::Body(self.pool.intern(body))
     }
 }

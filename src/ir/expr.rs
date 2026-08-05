@@ -2,14 +2,8 @@ use core::marker::PhantomData;
 use core::num::NonZeroU32;
 
 use crate::{
-    DebugWithConstants, delegate_to_debug,
-    ir::{
-        constant::{BoxOrConstant, ConstantPool, Internalizable},
-        intrinsics::Intrinsic,
-        metadata::{MetadataBuilder, MetadataIter, NestedMetadata},
-        pretty::{PrettyPrint, delegate_to_display},
-        symbol::{InternalizeAsSym, LabelSym, Symbol, SymbolTypeMatch, VarSym},
-        types::{IntType, Signature, SignatureBuilder, TypeBuilder},
+    DebugWithConstants, delegate_to_debug, ir::{
+        constant::{BoxOrConstant, ConstantPool, Internalizable}, decls::DeclScopeId, intrinsics::Intrinsic, metadata::{MetadataBuilder, MetadataIter, NestedMetadata}, pretty::{PrettyPrint, delegate_to_display}, symbol::{InternalizeAsSym, LabelSym, Symbol, SymbolTypeMatch, VarSym}, types::{IntType, Signature, SignatureBuilder, TypeBuilder},
     },
 };
 
@@ -55,7 +49,7 @@ pub enum ValueBody<'ir> {
     ByteLiteral(Constant<'ir, [u8]>),
     Null,
     GlobalAddr(Constant<'ir, Symbol>),
-    LocalAddr(Constant<'ir, Symbol>),
+    LocalAddr(Constant<'ir, LabelSym>, DeclScopeId<'ir>),
     Uninit,
     Invalid,
     ZeroInit,
@@ -93,8 +87,8 @@ impl<'ir> PrettyPrint<'ir> for ValueBody<'ir> {
                 f.write_str("global_addr ")?;
                 constant.fmt(f)
             }
-            ValueBody::LocalAddr(constant) => {
-                f.write_str("global_addr %")?;
+            ValueBody::LocalAddr(constant, _) => {
+                f.write_str("local_addr %")?;
                 constant.fmt(f)
             }
             ValueBody::Uninit => f.write_str("uninit"),
@@ -108,11 +102,12 @@ impl<'ir> PrettyPrint<'ir> for ValueBody<'ir> {
 pub struct ValueBuilder<'ir, 'a> {
     pool: &'a mut ConstantPool<'ir>,
     ty: Option<Type<'ir>>,
+    scope: Option<DeclScopeId<'ir>>,
 }
 
 impl<'ir, 'a> ValueBuilder<'ir, 'a> {
-    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>) -> Self {
-        Self { pool, ty: None }
+    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>, scope: Option<DeclScopeId<'ir>>) -> Self {
+        Self { pool, ty: None, scope }
     }
 
     fn finish(&mut self, body: ValueBody<'ir>) -> Value<'ir> {
@@ -297,15 +292,17 @@ pub struct BasicBlockBuilder<'ir, 'b> {
     metadata: Vec<Metadata<'ir>>,
     params: Vec<(Constant<'ir, VarSym>, Type<'ir>)>,
     stats: Vec<Statement<'ir>>,
+    scope: DeclScopeId<'ir>,
 }
 
 impl<'ir, 'a> BasicBlockBuilder<'ir, 'a> {
-    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>) -> Self {
+    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>, scope: DeclScopeId<'ir>) -> Self {
         Self {
             pool,
             metadata: Vec::new(),
             params: Vec::new(),
             stats: Vec::new(),
+            scope,
         }
     }
 
@@ -313,7 +310,7 @@ impl<'ir, 'a> BasicBlockBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> &mut Self {
-        let meta = f(&mut MetadataBuilder::new(self.pool));
+        let meta = f(&mut MetadataBuilder::new(self.pool, Some(self.scope)));
         self.metadata.push(meta);
         self
     }
@@ -328,7 +325,7 @@ impl<'ir, 'a> BasicBlockBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> &mut Self {
-        self.stats.push(f(&mut StatementBuilder::new(self.pool)));
+        self.stats.push(f(&mut StatementBuilder::new(self.pool, self.scope)));
         self
     }
 
@@ -340,7 +337,7 @@ impl<'ir, 'a> BasicBlockBuilder<'ir, 'a> {
         name: S,
         f: F,
     ) -> BasicBlock<'ir> {
-        let term = f(&mut TermBuilder::new(self.pool));
+        let term = f(&mut TermBuilder::new(self.pool, self.scope));
         let name = self.pool.intern(name);
 
         BasicBlock {
@@ -436,7 +433,7 @@ pub enum ExprBody<'ir> {
 #[non_exhaustive]
 pub enum SimpleExprBody<'ir> {
     Const(Value<'ir>),
-    SsaVar(Constant<'ir, VarSym>),
+    SsaVar(Constant<'ir, VarSym>, DeclScopeId<'ir>),
 }
 
 impl<'ir> PrettyPrint<'ir> for SimpleExpr<'ir> {
@@ -447,7 +444,7 @@ impl<'ir> PrettyPrint<'ir> for SimpleExpr<'ir> {
                 f.write_str("const ")?;
                 value.fmt(f)
             },
-            SimpleExprBody::SsaVar(var) => {
+            SimpleExprBody::SsaVar(var, _) => {
                 f.write_str("var ")?;
                 self.ty.fmt(f)?;
                 f.write_str(" ")?;
@@ -615,14 +612,16 @@ pub struct ExprBuilder<'ir, 'a> {
     pool: &'a mut ConstantPool<'ir>,
     metadata: Vec<Metadata<'ir>>,
     ty: Option<Type<'ir>>,
+    scope: DeclScopeId<'ir>,
 }
 
 impl<'ir, 'a> ExprBuilder<'ir, 'a> {
-    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>) -> Self {
+    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>, scope: DeclScopeId<'ir>) -> Self {
         Self {
             pool,
             metadata: Vec::new(),
             ty: None,
+            scope,
         }
     }
 
@@ -630,7 +629,7 @@ impl<'ir, 'a> ExprBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> &mut Self {
-        let meta = f(&mut MetadataBuilder::new(self.pool));
+        let meta = f(&mut MetadataBuilder::new(self.pool, Some(self.scope)));
         self.metadata.push(meta);
         self
     }
@@ -677,7 +676,7 @@ impl<'ir, 'a> ExprBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> S where SimpleExpr<'ir>: Into<S> {
-        let mut value = f(&mut ValueBuilder::new(self.pool));
+        let mut value = f(&mut ValueBuilder::new(self.pool, Some(self.scope)));
 
         if self.ty.is_none() {
             let ty = core::mem::replace(&mut value.ty, Type::void());
@@ -698,14 +697,14 @@ impl<'ir, 'a> ExprBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> Expr<'ir> {
-        let binexpr = f(&mut BinaryOpBuilder::new(self.pool));
+        let binexpr = f(&mut BinaryOpBuilder::new(self.pool, self.scope));
 
         self.finish(ExprBody::BinaryOp(binexpr))
     }
 
     pub fn ssa_var<R, S: InternalizeAsSym<'ir, VarSym>>(&mut self, sym: S) -> R where SimpleExpr<'ir>: Into<R> {
         let var = self.pool.intern(sym);
-        self.finish_simple(SimpleExprBody::SsaVar(var)).into()
+        self.finish_simple(SimpleExprBody::SsaVar(var, self.scope)).into()
     }
 }
 
@@ -793,15 +792,17 @@ pub struct BinaryOpBuilder<'ir, 'a> {
     overflow: OverflowBehaviour,
     left: Option<SimpleExpr<'ir>>,
     right: Option<SimpleExpr<'ir>>,
+    scope: DeclScopeId<'ir>,
 }
 
 impl<'ir, 'a> BinaryOpBuilder<'ir, 'a> {
-    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>) -> Self {
+    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>, scope: DeclScopeId<'ir>) -> Self {
         Self {
             pool,
             overflow: OverflowBehaviour::Wrap,
             left: None,
             right: None,
+            scope,
         }
     }
 
@@ -809,7 +810,7 @@ impl<'ir, 'a> BinaryOpBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> &mut Self {
-        let left = f(&mut ExprBuilder::new(self.pool));
+        let left = f(&mut ExprBuilder::new(self.pool, self.scope));
         self.left = Some(left);
         self
     }
@@ -818,7 +819,7 @@ impl<'ir, 'a> BinaryOpBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> &mut Self {
-        let right = f(&mut ExprBuilder::new(self.pool));
+        let right = f(&mut ExprBuilder::new(self.pool, self.scope));
         self.right = Some(right);
         self
     }
@@ -888,11 +889,12 @@ impl<'ir> PrettyPrint<'ir> for AssignStatement<'ir> {
 
 pub struct StatementBuilder<'ir, 'a> {
     pool: &'a mut ConstantPool<'ir>,
+    scope: DeclScopeId<'ir>,
 }
 
 impl<'ir, 'a> StatementBuilder<'ir, 'a> {
-    pub(crate) const fn new(pool: &'a mut ConstantPool<'ir>) -> Self {
-        Self { pool }
+    pub(crate) const fn new(pool: &'a mut ConstantPool<'ir>, scope: DeclScopeId<'ir>) -> Self {
+        Self { pool, scope }
     }
 
     pub fn assign<
@@ -901,18 +903,19 @@ impl<'ir, 'a> StatementBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> Statement<'ir> {
-        Statement::Assign(f(&mut AssignStatementBuilder::new(self.pool)))
+        Statement::Assign(f(&mut AssignStatementBuilder::new(self.pool, self.scope)))
     }
 }
 
 pub struct AssignStatementBuilder<'ir, 'a> {
     pool: &'a mut ConstantPool<'ir>,
     ty: Option<Constant<'ir, Type<'ir>>>,
+    scope: DeclScopeId<'ir>,
 }
 
 impl<'ir, 'a> AssignStatementBuilder<'ir, 'a> {
-    pub(crate) const fn new(pool: &'a mut ConstantPool<'ir>) -> Self {
-        Self { pool, ty: None }
+    pub(crate) const fn new(pool: &'a mut ConstantPool<'ir>, scope: DeclScopeId<'ir>) -> Self {
+        Self { pool, ty: None, scope }
     }
 
     pub fn assign_type<T: Internalizable<'ir, Type<'ir>>>(&mut self, ty: T) -> &mut Self {
@@ -937,7 +940,7 @@ impl<'ir, 'a> AssignStatementBuilder<'ir, 'a> {
         sym: S,
         f: F,
     ) -> AssignStatement<'ir> {
-        let value = f(&mut ExprBuilder::new(self.pool));
+        let value = f(&mut ExprBuilder::new(self.pool, self.scope));
         let ty = self
             .ty
             .take()
@@ -1037,13 +1040,15 @@ impl<'ir> PrettyPrint<'ir> for Branch<'ir> {
 pub struct TermBuilder<'ir, 'a> {
     pool: &'a mut ConstantPool<'ir>,
     metadata: Vec<Metadata<'ir>>,
+    scope: DeclScopeId<'ir>,
 }
 
 impl<'ir, 'a> TermBuilder<'ir, 'a> {
-    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>) -> Self {
+    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>, scope: DeclScopeId<'ir>) -> Self {
         Self {
             pool,
             metadata: Vec::new(),
+            scope,
         }
     }
 
@@ -1051,7 +1056,7 @@ impl<'ir, 'a> TermBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> &mut Self {
-        let meta = f(&mut MetadataBuilder::new(self.pool));
+        let meta = f(&mut MetadataBuilder::new(self.pool, Some(self.scope)));
         self.metadata.push(meta);
         self
     }
@@ -1073,7 +1078,7 @@ impl<'ir, 'a> TermBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> Terminator<'ir> {
-        let expr = f(&mut ExprBuilder::new(self.pool));
+        let expr = f(&mut ExprBuilder::new(self.pool, self.scope));
         self.finish(TerminatorBody::Return(expr))
     }
 
@@ -1085,7 +1090,7 @@ impl<'ir, 'a> TermBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> Terminator<'ir> {
-        let term = f(&mut CallBuilder::new(self.pool));
+        let term = f(&mut CallBuilder::new(self.pool, self.scope));
         self.finish(TerminatorBody::Call(term))
     }
 
@@ -1093,7 +1098,7 @@ impl<'ir, 'a> TermBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> Terminator<'ir> {
-        let term = f(&mut JumpBuilder::new(self.pool));
+        let term = f(&mut JumpBuilder::new(self.pool, self.scope));
         self.finish(TerminatorBody::Jump(term))
     }
 
@@ -1101,7 +1106,7 @@ impl<'ir, 'a> TermBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> Terminator<'ir> {
-        let term = f(&mut CallBuilder::new(self.pool));
+        let term = f(&mut CallBuilder::new(self.pool, self.scope));
         self.finish(TerminatorBody::Tailcall(term))
     }
 
@@ -1111,7 +1116,7 @@ impl<'ir, 'a> TermBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> Terminator<'ir> {
-        let term = f(&mut CallBuilder::new(self.pool));
+        let term = f(&mut CallBuilder::new(self.pool, self.scope));
         self.finish(TerminatorBody::CallIntrinsic(term))
     }
 
@@ -1121,7 +1126,7 @@ impl<'ir, 'a> TermBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> Terminator<'ir> {
-        let term = f(&mut CallBuilder::new(self.pool));
+        let term = f(&mut CallBuilder::new(self.pool, self.scope));
         self.finish(TerminatorBody::TailcallIntrinsic(term))
     }
 
@@ -1129,7 +1134,7 @@ impl<'ir, 'a> TermBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> Terminator<'ir> {
-        let term = f(&mut BranchBuilder::new(self.pool));
+        let term = f(&mut BranchBuilder::new(self.pool, self.scope));
         self.finish(TerminatorBody::Branch(term))
     }
 }
@@ -1162,14 +1167,16 @@ pub struct JumpBuilder<'ir, 'a> {
     pool: &'a mut ConstantPool<'ir>,
     metadata: Vec<Metadata<'ir>>,
     args: Vec<Constant<'ir, VarSym>>,
+    scope: DeclScopeId<'ir>,
 }
 
 impl<'ir, 'a> JumpBuilder<'ir, 'a> {
-    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>) -> Self {
+    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>, scope: DeclScopeId<'ir>) -> Self {
         Self {
             pool,
             metadata: Vec::new(),
             args: Vec::new(),
+            scope,
         }
     }
 
@@ -1177,7 +1184,7 @@ impl<'ir, 'a> JumpBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> &mut Self {
-        let meta = f(&mut MetadataBuilder::new(self.pool));
+        let meta = f(&mut MetadataBuilder::new(self.pool, Some(self.scope)));
         self.metadata.push(meta);
         self
     }
@@ -1284,16 +1291,18 @@ pub struct CallBuilder<'ir, 'a> {
     params: Vec<Expr<'ir>>,
     const_params: Vec<Value<'ir>>,
     sig: Option<Signature<'ir>>,
+    scope: DeclScopeId<'ir>,
 }
 
 impl<'ir, 'a> CallBuilder<'ir, 'a> {
-    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>) -> Self {
+    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>, scope: DeclScopeId<'ir>,) -> Self {
         Self {
             pool,
             metadata: Vec::new(),
             params: Vec::new(),
             const_params: Vec::new(),
             sig: None,
+            scope,
         }
     }
 
@@ -1301,7 +1310,7 @@ impl<'ir, 'a> CallBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> &mut Self {
-        let meta = f(&mut MetadataBuilder::new(self.pool));
+        let meta = f(&mut MetadataBuilder::new(self.pool, Some(self.scope)));
         self.metadata.push(meta);
         self
     }
@@ -1327,7 +1336,7 @@ impl<'ir, 'a> CallBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> &mut Self {
-        let arg = f(&mut ExprBuilder::new(self.pool));
+        let arg = f(&mut ExprBuilder::new(self.pool, self.scope));
 
         self.params.push(arg);
 
@@ -1338,7 +1347,7 @@ impl<'ir, 'a> CallBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> &mut Self {
-        let val = f(&mut ValueBuilder::new(self.pool));
+        let val = f(&mut ValueBuilder::new(self.pool, Some(self.scope)));
         self.const_params.push(val);
         self
     }
@@ -1351,7 +1360,7 @@ impl<'ir, 'a> CallBuilder<'ir, 'a> {
         jump: J,
         target: E,
     ) -> CallTerm<'ir> {
-        let jump = jump(&mut JumpBuilder::new(self.pool));
+        let jump = jump(&mut JumpBuilder::new(self.pool, self.scope));
         let call = self.finish(target);
 
         CallTerm {
@@ -1365,7 +1374,7 @@ impl<'ir, 'a> CallBuilder<'ir, 'a> {
         jump: J,
         intrin: Intrinsic<'ir>,
     ) -> CallIntrinsicTerm<'ir> {
-        let jump = jump(&mut JumpBuilder::new(self.pool));
+        let jump = jump(&mut JumpBuilder::new(self.pool, self.scope));
         let call = self.finish_intrinsic(intrin);
 
         CallIntrinsicTerm {
@@ -1381,7 +1390,7 @@ impl<'ir, 'a> CallBuilder<'ir, 'a> {
         if !self.const_params.is_empty() {
             panic!("Only intrinsic calls can have const params");
         }
-        let target = target(&mut ExprBuilder::new(self.pool));
+        let target = target(&mut ExprBuilder::new(self.pool, self.scope));
 
         let sig = self.sig.take().expect("Signature Must be set");
         let metadata = MetadataList(core::mem::take(&mut self.metadata));
@@ -1415,14 +1424,16 @@ pub struct BranchBuilder<'ir, 'a> {
     pool: &'a mut ConstantPool<'ir>,
     left: Option<JumpTarget<'ir>>,
     right: Option<JumpTarget<'ir>>,
+    scope: DeclScopeId<'ir>,
 }
 
 impl<'ir, 'a> BranchBuilder<'ir, 'a> {
-    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>) -> Self {
+    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>, scope: DeclScopeId<'ir>) -> Self {
         Self {
             pool,
             left: None,
             right: None,
+            scope
         }
     }
 
@@ -1430,7 +1441,7 @@ impl<'ir, 'a> BranchBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> &mut Self {
-        self.left = Some(f(&mut JumpBuilder::new(self.pool)));
+        self.left = Some(f(&mut JumpBuilder::new(self.pool, self.scope)));
         self
     }
 
@@ -1438,7 +1449,7 @@ impl<'ir, 'a> BranchBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> &mut Self {
-        self.right = Some(f(&mut JumpBuilder::new(self.pool)));
+        self.right = Some(f(&mut JumpBuilder::new(self.pool, self.scope)));
         self
     }
 
@@ -1449,7 +1460,7 @@ impl<'ir, 'a> BranchBuilder<'ir, 'a> {
         let dest = self.left.take().expect("then must be called first");
         let else_dest = self.right.take().expect("else_then must be called first");
 
-        let cond = f(&mut ExprBuilder::new(self.pool));
+        let cond = f(&mut ExprBuilder::new(self.pool, self.scope));
 
         Branch {
             cond,

@@ -1,16 +1,10 @@
-use std::{cmp::Ordering, marker::PhantomData};
+use std::{cmp::Ordering, marker::PhantomData, num::NonZero};
 
 use lxca_derive::DebugWithConstants;
 
 use crate::{
-    binfmt::dec::Decode,
-    delegate_to_debug,
-    fmt_helpers::WithConstants,
-    ir::{
-        decls::{DeclBuilder, Declaration},
-        metadata::{Metadata, MetadataBuilder, MetadataIter, NestedMetadata},
-        pretty::{PrettyPrint, PrettyPrinter},
-        types::{Signature, SignatureBuilder, TypeBuilder},
+    binfmt::dec::Decode, delegate_to_debug, fmt_helpers::WithConstants, ir::{
+        asm::{InlineAssembly, InlineAssemblyBuilder}, decls::{DeclBuilder, DeclScopeId, Declaration}, metadata::{Metadata, MetadataBuilder, MetadataIter, NestedMetadata}, pretty::{PrettyPrint, PrettyPrinter}, types::{Signature, SignatureBuilder, TypeBuilder},
     },
 };
 
@@ -118,6 +112,7 @@ pub struct File<'ir> {
     constant_pool: ConstantPool<'ir>,
     source_metadata: SourceMetadata<'ir>,
     decls: Vec<Declaration<'ir>>,
+    module_assembly: Vec<InlineAssembly<'ir>>,
 }
 
 impl<'ir> core::fmt::Debug for File<'ir> {
@@ -176,6 +171,12 @@ impl<'ir> PrettyPrint<'ir> for File<'ir> {
         for decl in &self.decls {
             decl.fmt(f)?;
         }
+
+        for asm in &self.module_assembly {
+            f.write_str("global ")?;
+            asm.fmt(f)?;
+            f.write_str(";\n")?;
+        }
         Ok(())
     }
 }
@@ -191,6 +192,8 @@ pub struct FileBuilder<'ir> {
     constant_pool: Option<ConstantPool<'ir>>,
     metadata: Vec<Metadata<'ir>>,
     decls: Vec<Declaration<'ir>>,
+    module_assembly: Vec<InlineAssembly<'ir>>,
+    decl_scope_id: NonZero<u32>
 }
 
 impl<'ir> FileBuilder<'ir> {
@@ -199,6 +202,8 @@ impl<'ir> FileBuilder<'ir> {
             constant_pool: Some(unsafe { ConstantPool::new() }),
             metadata: Vec::new(),
             decls: Vec::new(),
+            module_assembly: Vec::new(),
+            decl_scope_id: nzlit!(1),
         }
     }
 
@@ -225,8 +230,17 @@ impl<'ir> FileBuilder<'ir> {
         &mut self,
         f: F,
     ) -> &mut Self {
-        let decl = f(&mut DeclBuilder::new(self.constant_pool()));
+        let scope = DeclScopeId(self.decl_scope_id, PhantomIrMarker(PhantomData));
+        self.decl_scope_id = self.decl_scope_id.checked_add(1).expect("Too many declarations");
+        let decl = f(&mut DeclBuilder::new(self.constant_pool(), scope));
         self.decls.push(decl);
+        self
+    }
+
+    pub fn global_asm<F: for<'b> FnOnce(&mut InlineAssemblyBuilder<'ir, 'b>) -> InlineAssembly<'ir>>(&mut self, f: F) -> &mut Self {
+        let asm = f(&mut InlineAssemblyBuilder::new(self.constant_pool(), None));
+
+        self.module_assembly.push(asm);
         self
     }
 
@@ -234,7 +248,7 @@ impl<'ir> FileBuilder<'ir> {
         &mut self,
         f: F,
     ) -> &mut Self {
-        let meta = f(&mut MetadataBuilder::new(self.constant_pool()));
+        let meta = f(&mut MetadataBuilder::new(self.constant_pool(), None));
         self.metadata.push(meta);
         self
     }
@@ -259,6 +273,7 @@ impl<'ir> FileBuilder<'ir> {
                 metadata_items: MetadataList(core::mem::take(&mut self.metadata)),
             },
             decls: core::mem::take(&mut self.decls),
+            module_assembly: core::mem::take(&mut self.module_assembly),
         }
     }
 }

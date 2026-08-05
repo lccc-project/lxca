@@ -482,6 +482,7 @@ pub struct ConstantPool<'ir> {
     _marker: PhantomIrMarker<'ir>,
     inner: ConstantPoolInner<'ir>,
     tbl: HashTable<NonZeroUsize>,
+    
 }
 
 impl<'ir> HasIr<'ir> for ConstantPool<'ir> {
