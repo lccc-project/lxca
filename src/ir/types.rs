@@ -47,16 +47,7 @@ impl<'ir> Type<'ir> {
     }
 
     pub fn type_eq(&self, other: &Type<'ir>, pool: &ConstantPool<'ir>) -> bool {
-        match (self.body(pool), other.body(pool)) {
-            (TypeBody::Void, TypeBody::Void) => true,
-            (TypeBody::Integer(ity1), TypeBody::Integer(ity2)) => ity1 == ity2,
-            (TypeBody::Char(width1), TypeBody::Char(width2)) => width1 == width2,
-            (TypeBody::Pointer(ptr1), TypeBody::Pointer(ptr2)) => {
-                ptr1.ty(pool).type_eq(ptr2.ty(pool), pool)
-            }
-            (TypeBody::Function(sig1), TypeBody::Function(sig2)) => sig1.sig_eq(sig2, pool),
-            _ => false,
-        }
+        self.body(pool).type_body_eq(other.body(pool), pool)
     }
 
     pub fn call_signature<'a>(&'a self, pool: &'a ConstantPool<'ir>) -> Option<&'a Signature<'ir>> {
@@ -80,6 +71,23 @@ pub enum TypeBody<'ir> {
     Pointer(PointerType<'ir>),
     Function(Signature<'ir>),
     Void,
+    Never
+}
+
+impl<'ir> TypeBody<'ir> {
+    pub fn type_body_eq(&self, other: &TypeBody<'ir>, pool: &ConstantPool<'ir>) -> bool {
+        match (self, other) {
+            (TypeBody::Interned(intern), body2) => intern.get(pool).body(pool).type_body_eq(body2, pool),
+            (body1, TypeBody::Interned(intern)) => body1.type_body_eq(intern.get(pool).body(pool), pool),
+            (TypeBody::Integer(ity1),TypeBody::Integer(ity2)) => ity1==ity2,
+            (TypeBody::Char(bits1), TypeBody::Char(bits2)) => bits1 == bits2,
+            (TypeBody::Pointer(ptr1), TypeBody::Pointer(ptr2)) => ptr1.ty(pool).type_eq(ptr2.ty(pool), pool),
+            (TypeBody::Function(sig1), TypeBody::Function(sig2)) => sig1.sig_eq(sig2, pool),
+            (TypeBody::Void, TypeBody::Void) => true,
+            (TypeBody::Never, TypeBody::Never) => true,
+            _ => false,
+        }
+    }
 }
 
 impl<'ir> PrettyPrint<'ir> for TypeBody<'ir> {
@@ -98,6 +106,7 @@ impl<'ir> PrettyPrint<'ir> for TypeBody<'ir> {
                 sig.fmt(f)
             }
             TypeBody::Void => f.write_str("void()"),
+            TypeBody::Never => f.write_str("empty()"),
         }
     }
 }
@@ -132,6 +141,10 @@ impl<'ir, 'a> TypeBuilder<'ir, 'a> {
 
     pub fn void(&mut self) -> Type<'ir> {
         self.finish(TypeBody::Void)
+    }
+
+    pub fn empty(&mut self) -> Type<'ir> {
+        self.finish(TypeBody::Never)
     }
 
     pub fn int_type(&mut self, ity: IntType) -> Type<'ir> {
@@ -193,6 +206,13 @@ impl<'ir> Type<'ir> {
         Type {
             metadata: MetadataList(Vec::new()),
             body: TypeBody::Void,
+        }
+    }
+
+    pub const fn empty() -> Type<'ir> {
+        Type {
+            metadata: MetadataList(Vec::new()),
+            body: TypeBody::Never,
         }
     }
 

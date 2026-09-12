@@ -3,11 +3,12 @@ use std::mem::MaybeUninit;
 use lxca_derive::DebugWithConstants;
 
 use crate::ir::constant::ConstantPool;
-use crate::ir::expr::{Value, ValueBody};
+use crate::ir::expr::{AccessClass, Value, ValueBody};
 use crate::ir::pretty::PrettyPrint;
 
 use crate::ir::types::{Signature, TypeBody};
 use crate::ir::{constant::Constant, symbol::Symbol};
+
 
 #[derive(Copy, Clone, DebugWithConstants, Hash, PartialEq, Eq)]
 #[non_exhaustive]
@@ -23,18 +24,23 @@ pub enum Intrinsic<'ir> {
     Realloc,
     ReallocZeroed,
     ReturnAddress,
+    Assume,
     Memcpy {inline: bool},
     Memmove {inline: bool},
     Memcmp {inline: bool},
     MemcmpEq {inline: bool},
     Memchr {inline: bool},
     Memset {inline: bool},
+    MemsetExplicit {inline: bool},
     Strcpy {inline: bool},
     Strchr {inline: bool},
     Strstr {inline: bool},
     Strcmp {inline: bool},
     StrcmpEq {inline: bool},
     Strlen {inline: bool},
+    ReadVolatile,
+    WriteVolatile,
+    Trap,
 }
 
 fn map_slice_and<'a, const N: usize, T, R, F: FnMut(&'a T) -> R>(arr: &'a [T], mut f: F) -> Option<[R; N]> {
@@ -225,6 +231,12 @@ impl<'ir> Intrinsic<'ir> {
                     _ => false,
                 }
             }
+            Self::Assume => {
+                match (sig.ret_ty(constants).body(constants), match_params!(sig => constants)) {
+                    (TypeBody::Void, Some([TypeBody::Integer(_)])) => true,
+                    _ => false,
+                }
+            }
             Self::ReturnAddress => {
                 match (sig.ret_ty(constants).body(constants), sig.params(constants)) {
                     (TypeBody::Pointer(_), []) => true,
@@ -287,7 +299,7 @@ impl<'ir> Intrinsic<'ir> {
                 }
             }
 
-            Self::Memchr { .. } | Self::Memset { .. } => {
+            Self::Memchr { .. } | Self::Memset { .. } | Self::MemsetExplicit { .. } => {
                 match cparams {
                     [] => {}
                     [volatile] => {
@@ -466,6 +478,72 @@ impl<'ir> Intrinsic<'ir> {
                     _ => false
                 }
             }
+            Self::ReadVolatile => {
+                match cparams {
+                    [] => {},
+                    [access] => {
+                        match access.ty().body(constants) {
+                            TypeBody::Integer(val) if (val.width == 4 || val.width == 8 || val.width == 16) && !val.signed => {}
+                            _ => return false
+                        }
+
+                        match access.body(constants) {
+                            ValueBody::Integer(val) => {
+                                let val = val.borrow::<u16>().read(constants);
+                                if AccessClass::from_bits_checked(val).is_none() {
+                                    return false
+                                }
+                            }
+                            _ => return false,
+                        }
+                    }
+                    _ => return false
+                }
+
+                match (sig.ret_ty(constants).body(constants), match_params!(sig => constants)) {
+                    (TypeBody::Void, _) => false,
+                    (ty, Some([TypeBody::Pointer(pty)])) => sig.ret_ty(constants).type_eq(pty.ty(constants), constants),
+                    _ => false,
+                }
+            }
+            Self::WriteVolatile => {
+                match cparams {
+                    [] => {},
+                    [access] => {
+                        match access.ty().body(constants) {
+                            TypeBody::Integer(val) if (val.width == 4 || val.width == 8 || val.width == 16) && !val.signed => {}
+                            _ => return false
+                        }
+
+                        match access.body(constants) {
+                            ValueBody::Integer(val) => {
+                                let val = val.borrow::<u16>().read(constants);
+                                if AccessClass::from_bits_checked(val).is_none() {
+                                    return false
+                                }
+                            }
+                            _ => return false,
+                        }
+                    }
+                    _ => return false
+                }
+
+                match (sig.ret_ty(constants).body(constants), match_params!(sig => constants)) {
+                    (TypeBody::Void, Some([TypeBody::Pointer(pty), ty])) => pty.ty(constants).body(constants).type_body_eq(ty, constants),
+                    _ => false,
+                }
+            }
+            Self::Trap => {
+                match cparams {
+                    [] => {}
+                    _ => return false
+                }
+
+                match (sig.ret_ty(constants).body(constants), match_params!(sig => constants)) {
+                    (TypeBody::Void | TypeBody::Never, Some([])) => true,
+                    _ => false,
+                }
+            }
         }
     }
 }
@@ -500,7 +578,8 @@ impl<'ir> PrettyPrint<'ir> for Intrinsic<'ir> {
             Intrinsic::Strstr { inline } |
             Intrinsic::Strcmp { inline } |
             Intrinsic::StrcmpEq { inline } |
-            Intrinsic::Strlen {inline} => {
+            Intrinsic::Strlen {inline} |
+            Intrinsic::MemsetExplicit { inline } => {
                 f.write_str("lxca::generic::mem::")?;
 
                 if *inline {
@@ -514,6 +593,7 @@ impl<'ir> PrettyPrint<'ir> for Intrinsic<'ir> {
                     Intrinsic::MemcmpEq { .. } =>  f.write_str("memcmpeq"),
                     Intrinsic::Memchr { .. } =>  f.write_str("memchr"),
                     Intrinsic::Memset { .. } =>  f.write_str("memset"),
+                    Intrinsic::MemsetExplicit { .. } => f.write_str("memset::explicit"),
                     Intrinsic::Strcpy { .. } =>  f.write_str("strcpy"),
                     Intrinsic::Strchr { .. } =>  f.write_str("strchr"),
                     Intrinsic::Strstr { .. } =>  f.write_str("strstr"),
@@ -523,6 +603,10 @@ impl<'ir> PrettyPrint<'ir> for Intrinsic<'ir> {
                     _ => unreachable!()
                 }
             },
+            Intrinsic::Assume => f.write_str("lxca::generic::assume"),
+            Intrinsic::ReadVolatile => f.write_str("lxca::generic::volatile_load"),
+            Intrinsic::WriteVolatile => f.write_str("lxca::generic::volatile_store"),
+            Intrinsic::Trap => f.write_str("lxca::generic::trap"),
         }
     }
 }

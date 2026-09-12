@@ -366,6 +366,21 @@ pub struct AccessClass {
     __: u16,
 }
 
+impl AccessClass {
+    pub const fn from_bits_checked(val: u16) -> Option<Self> {
+        if (val & 0xFF30) != 0 {
+            return None
+        }
+
+        let val = Self::from_bits(val);
+
+        match (val.atomic(), val.acquire(), val.release(), val.seq_cst()) {
+            (false, false, false, false) | (true, true, true, true) | (true, _, _, false) => Some(val),
+            _ => None
+        }
+    }
+}
+
 delegate_to_debug!(AccessClass);
 delegate_to_display!(AccessClass);
 
