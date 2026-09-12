@@ -6,6 +6,21 @@ use crate::{
     sym,
 };
 
+pub fn trap<'ir>(targ: impl Internalizable<'ir, str>, ctx: IrCtx<'ir>) -> File<'ir> {
+    ctx.build_file(|builder| {
+        builder.declare(|f| {
+            f.function(sym!(trap), |f| {
+                f.build_signature(|f| f.finish(Type::void()))
+                    .build_basic_block(|bb| {
+                        bb.finish(sym!(@0), |term| {
+                            term.tailcall_intrinsic(|c| c.signature_with(|s| s.finish(Type::empty())).finish_intrinsic(Intrinsic::Trap))
+                        })
+                    })
+                    .finish()
+            })
+        }).finish(targ)
+    })
+}
 
 pub fn return_42<'ir>(targ: impl Internalizable<'ir, str>, ctx: IrCtx<'ir>) -> File<'ir> {
     ctx.build_file(|builder| {
@@ -168,5 +183,5 @@ macro_rules! test_list {
 pub const TEST_FILES: &[(
     &'static str,
     for<'a, 'ir> fn(target: &'a str, ctx: IrCtx<'ir>) -> File<'ir>,
-)] = test_list![hello_world, return_42, addition, infinite_loop, black_box];
+)] = test_list![hello_world, return_42, addition, infinite_loop, black_box, trap];
 
