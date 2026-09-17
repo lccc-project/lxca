@@ -22,6 +22,25 @@ pub fn trap<'ir>(targ: impl Internalizable<'ir, str>, ctx: IrCtx<'ir>) -> File<'
     })
 }
 
+pub fn breakpoint<'ir>(targ: impl Internalizable<'ir, str>, ctx: IrCtx<'ir>) -> File<'ir> {
+    ctx.build_file(|builder| {
+        builder.declare(|f| {
+            f.function(sym!(trap), |f| {
+                f.build_signature(|f| f.finish(Type::void()))
+                    .build_basic_block(|bb| {
+                        bb.finish(sym!(@0), |term| {
+                            term.call_intrinsic(|c| c.signature_with(|s| s.finish(Type::empty())).intrinsic_with_next(
+                                |j| j.finish(sym!(@1))
+                                , Intrinsic::Breakpoint))
+                        })
+                    })
+                    .build_basic_block(|f| f.finish(sym!(@1), |term| term.return_void()))
+                    .finish()
+            })
+        }).finish(targ)
+    })
+}
+
 pub fn return_42<'ir>(targ: impl Internalizable<'ir, str>, ctx: IrCtx<'ir>) -> File<'ir> {
     ctx.build_file(|builder| {
         builder.declare(|f| {

@@ -41,6 +41,7 @@ pub enum Intrinsic<'ir> {
     ReadVolatile,
     WriteVolatile,
     Trap,
+    Breakpoint,
 }
 
 fn map_slice_and<'a, const N: usize, T, R, F: FnMut(&'a T) -> R>(arr: &'a [T], mut f: F) -> Option<[R; N]> {
@@ -544,6 +545,17 @@ impl<'ir> Intrinsic<'ir> {
                     _ => false,
                 }
             }
+            Self::Breakpoint => {
+                match cparams {
+                    [] => {}
+                    _ => return false
+                }
+
+                match (sig.ret_ty(constants).body(constants), match_params!(sig => constants)) {
+                    (TypeBody::Void, Some([])) => true,
+                    _ => false,
+                }
+            }
         }
     }
 }
@@ -607,6 +619,7 @@ impl<'ir> PrettyPrint<'ir> for Intrinsic<'ir> {
             Intrinsic::ReadVolatile => f.write_str("lxca::generic::volatile_load"),
             Intrinsic::WriteVolatile => f.write_str("lxca::generic::volatile_store"),
             Intrinsic::Trap => f.write_str("lxca::generic::trap"),
+            Intrinsic::Breakpoint => f.write_str("lxca::generic::breakpoint"),
         }
     }
 }
