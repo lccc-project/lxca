@@ -202,5 +202,5 @@ macro_rules! test_list {
 pub const TEST_FILES: &[(
     &'static str,
     for<'a, 'ir> fn(target: &'a str, ctx: IrCtx<'ir>) -> File<'ir>,
-)] = test_list![hello_world, return_42, addition, infinite_loop, black_box, trap];
+)] = test_list![hello_world, return_42, addition, infinite_loop, black_box, trap, breakpoint];
 
