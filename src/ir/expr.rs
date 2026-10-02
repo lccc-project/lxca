@@ -424,11 +424,7 @@ pub enum ExprBody<'ir> {
     Interned(Constant<'ir, Expr<'ir>>),
     UnaryOp(UnaryOp, OverflowBehaviour, SimpleExpr<'ir>),
     BinaryOp(BinaryExpr<'ir>),
-    CompareOp(
-        CompareOp,
-        SimpleExpr<'ir>,
-        SimpleExpr<'ir>,
-    ),
+    CompareOp(CompareExpr<'ir>),
     ReadField(
         SimpleExpr<'ir>,
         Constant<'ir, Type<'ir>>,
@@ -450,6 +446,13 @@ pub enum SimpleExprBody<'ir> {
     Const(Value<'ir>),
     SsaVar(Constant<'ir, VarSym>, DeclScopeId<'ir>),
 }
+
+#[derive(Clone, DebugWithConstants, Hash, PartialEq, Eq)]
+pub struct CompareExpr<'ir>(
+    pub CompareOp,
+    pub SimpleExpr<'ir>,
+    pub SimpleExpr<'ir>,
+);
 
 impl<'ir> PrettyPrint<'ir> for SimpleExpr<'ir> {
     fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
@@ -566,8 +569,9 @@ impl<'ir> PrettyPrint<'ir> for Expr<'ir> {
                 f.write_str(".")?;
                 field.fmt(f)
             }
-            ExprBody::CompareOp(op, left, right) => {
+            ExprBody::CompareOp(c) => {
                 f.write_str("compare ")?;
+                let CompareExpr(op, left, right) = c;
                 op.fmt(f)?;
                 f.write_str(" ")?;
                 self.ty.fmt(f)?;
@@ -717,6 +721,12 @@ impl<'ir, 'a> ExprBuilder<'ir, 'a> {
         self.finish(ExprBody::BinaryOp(binexpr))
     }
 
+    pub fn compare<F: FnOnce(&mut CompareOpBuilder<'ir, '_>) -> CompareExpr<'ir>>(&mut self, f: F) -> Expr<'ir> {
+        let expr = f(&mut CompareOpBuilder::new(self.pool, self.scope));
+
+        self.finish(ExprBody::CompareOp(expr))
+    }
+
     pub fn ssa_var<R, S: InternalizeAsSym<'ir, VarSym>>(&mut self, sym: S) -> R where SimpleExpr<'ir>: Into<R> {
         let var = self.pool.intern(sym);
         self.finish_simple(SimpleExprBody::SsaVar(var, self.scope)).into()
@@ -849,6 +859,49 @@ impl<'ir, 'a> BinaryOpBuilder<'ir, 'a> {
         let right = self.right.take().expect("Right Expression must be set");
 
         BinaryExpr(op, self.overflow, left, right)
+    }
+}
+
+pub struct CompareOpBuilder<'ir, 'a> {
+    pool: &'a mut ConstantPool<'ir>,
+    left: Option<SimpleExpr<'ir>>,
+    right: Option<SimpleExpr<'ir>>,
+    scope: DeclScopeId<'ir>,
+}
+
+impl<'ir, 'a> CompareOpBuilder<'ir, 'a> {
+    pub(crate) fn new(pool: &'a mut ConstantPool<'ir>, scope: DeclScopeId<'ir>) -> Self {
+        Self {
+            pool,
+            left: None,
+            right: None,
+            scope,
+        }
+    }
+
+    pub fn left_with<F: for<'b> FnOnce(&mut ExprBuilder<'ir, 'b>) -> SimpleExpr<'ir>>(
+        &mut self,
+        f: F,
+    ) -> &mut Self {
+        let left = f(&mut ExprBuilder::new(self.pool, self.scope));
+        self.left = Some(left);
+        self
+    }
+
+    pub fn right_with<F: for<'b> FnOnce(&mut ExprBuilder<'ir, 'b>) -> SimpleExpr<'ir>>(
+        &mut self,
+        f: F,
+    ) -> &mut Self {
+        let right = f(&mut ExprBuilder::new(self.pool, self.scope));
+        self.right = Some(right);
+        self
+    }
+
+    pub fn finish(&mut self, op: CompareOp) -> CompareExpr<'ir> {
+        let left = self.left.take().expect("Left Expression must be set");
+        let right = self.right.take().expect("Right Expression must be set");
+
+        CompareExpr(op, left, right)
     }
 }
 

@@ -294,6 +294,15 @@ macro_rules! sym {
             const { $crate::ir::symbol::VarSym::new($crate::macros::_core::concat!("%", $crate::macros::_core::stringify!($ident))) }
         }
     };
+    (%$($tt:tt).+) => {
+        const {
+            if false {
+                $($crate::sym!(%$tt);)*
+            }
+
+            $crate::ir::symbol::VarSym::new($crate::macros::_core::concat!("%" $(, $crate::macros::_core::stringify!($tt),)"."*))
+        }
+    };
     (@$lit:literal) => {
         const {
             let _v: $crate::macros::_core::primitive::u128 = $lit; // Filter out string literals and negative numbers

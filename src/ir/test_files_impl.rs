@@ -189,6 +189,76 @@ pub fn black_box<'ir>(targ: impl Internalizable<'ir, str>, ctx: IrCtx<'ir>) -> F
     })
 }
 
+pub fn fib<'ir>(targ: impl Internalizable<'ir, str>, ctx: IrCtx<'ir>) -> File<'ir> {
+    ctx.build_file(|builder| {
+        let u64 = Type::uint(64);
+        let u32 = Type::uint(32);
+        let ity_u64 = IntType::uint(64);
+        let ity_u32 = IntType::uint(32);
+        builder
+            .declare(|f| {
+                f.function(sym!(fibb), |f| {
+                    f.build_signature(|f| f.param(u32.clone()).finish(u64.clone()))
+                        .with_param_name(sym!(%0))
+                        .build_basic_block(|bb| {
+                            bb
+                                .param(sym!(%0), u32.clone())
+                                .statement(|s| s.assign(|r| r.assign_type(u64.clone()).finish(sym!(%val), |e| e.const_int(ity_u64, 1u128))))
+                                .statement(|s| s.assign(|r| r.assign_type(u64.clone()).finish(sym!(%last), |e| e.const_int(ity_u64, 0u128))))
+                                .finish(sym!(@0), |v| v.branch(|j| {
+                                    j
+                                        .then(|j| j.arg(sym!(%0)).arg(sym!(%val)).arg(sym!(%last)).finish(sym!(@1)))
+                                        .else_then(|j| j.arg(sym!(%val)).finish(sym!(@2)))
+                                        .finish(|r| r.compare(|cc| {
+                                            cc
+                                                .left_with(|r| r.ty(u32.clone()).ssa_var(sym!(%0)))
+                                                .right_with(|r| r.const_int(ity_u32, 0u128))
+                                                .finish(super::expr::CompareOp::GreaterThan)
+                                        }))
+                                }))
+                        })
+                        .build_basic_block(|bb| {
+                            bb
+                                .param(sym!(%0.count), u32.clone())
+                                .param(sym!(%0.val), u64.clone())
+                                .param(sym!(%0.last), u64.clone())
+                                .statement(|s| s.assign(|r| r.assign_type(u64.clone()).finish(sym!(%1.last), |e| e.ty(u64.clone()).ssa_var(sym!(%0.val)))))
+                                .statement(|s| s.assign(|r| r.assign_type(u64.clone()).finish(sym!(%1.val), |e| e.binop(|e| {
+                                    e.left_with(|e| e.ty(u64.clone()).ssa_var(sym!(%0.val)))
+                                        .right_with(|e| e.ty(u64.clone()).ssa_var(sym!(%0.last)))
+                                        .finish(BinaryOp::Add)
+                                }))))
+                                .statement(|s| s.assign(|r| r.assign_type(u64.clone()).finish(sym!(%1.count), |e| e.binop(|e| {
+                                    e.left_with(|e| e.ty(u64.clone()).ssa_var(sym!(%0.count)))
+                                        .right_with(|e| e.const_int(IntType::uint(0), 1u128))
+                                        .finish(BinaryOp::Sub)
+                                }))))
+                                .finish(sym!(@1), |t| {
+                                    t
+                                        .branch(|j| j.then(|j| j.arg(sym!(%1.count)).arg(sym!(%1.val)).arg(sym!(%1.last)).finish(sym!(@1)))
+                                        .else_then(|j| j.arg(sym!(%1.val)).finish(sym!(@2)))
+                                        .finish(|r| r.compare(|cc| {
+                                            cc
+                                                .left_with(|r| r.ty(u32.clone()).ssa_var(sym!(%0)))
+                                                .right_with(|r| r.const_int(ity_u32, 0u128))
+                                                .finish(super::expr::CompareOp::GreaterThan)
+                                        })))
+                                })
+                        })
+                        .build_basic_block(|bb| {
+                            bb
+                                .param(sym!(%2.val), u64.clone())
+                                .finish(sym!(@2), |t| {
+                                    t.return_val(|e| e.ty(u64.clone()).ssa_var(sym!(%2.val)))
+                                })
+                        })
+                    .finish()
+                })
+            })
+            .finish(targ)
+    })
+}
+
 macro_rules! test_list {
     [$($name:ident),*] => {
         {
@@ -202,5 +272,5 @@ macro_rules! test_list {
 pub const TEST_FILES: &[(
     &'static str,
     for<'a, 'ir> fn(target: &'a str, ctx: IrCtx<'ir>) -> File<'ir>,
-)] = test_list![hello_world, return_42, addition, infinite_loop, black_box, trap, breakpoint];
+)] = test_list![hello_world, return_42, addition, infinite_loop, black_box, trap, breakpoint, fib];
 
