@@ -716,7 +716,15 @@ impl<'ir, 'a> ExprBuilder<'ir, 'a> {
         &mut self,
         f: F,
     ) -> Expr<'ir> {
-        let binexpr = f(&mut BinaryOpBuilder::new(self.pool, self.scope));
+        let mut binexpr = f(&mut BinaryOpBuilder::new(self.pool, self.scope));
+
+        if self.ty.is_none() {
+            let ty = core::mem::replace(&mut binexpr.2.ty, Type::void());
+            let ty = self.pool.intern(ty);
+
+            binexpr.2.ty = Type::intern(ty);
+            self.ty = Some(Type::intern(ty));
+        }
 
         self.finish(ExprBody::BinaryOp(binexpr))
     }
@@ -725,7 +733,7 @@ impl<'ir, 'a> ExprBuilder<'ir, 'a> {
         let expr = f(&mut CompareOpBuilder::new(self.pool, self.scope));
 
         if self.ty.is_none() {
-            self.ty = Some(Type::uint(1)); //
+            self.ty = Some(Type::uint(1)); // Default to bool.
         }
 
         self.finish(ExprBody::CompareOp(expr))
