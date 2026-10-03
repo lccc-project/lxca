@@ -239,7 +239,7 @@ pub fn fib<'ir>(targ: impl Internalizable<'ir, str>, ctx: IrCtx<'ir>) -> File<'i
                                         .else_then(|j| j.arg(sym!(%1.val)).finish(sym!(@2)))
                                         .finish(|r| r.compare(|cc| {
                                             cc
-                                                .left_with(|r| r.ty(u32.clone()).ssa_var(sym!(%0)))
+                                                .left_with(|r| r.ty(u32.clone()).ssa_var(sym!(%1.count)))
                                                 .right_with(|r| r.const_int(ity_u32, 0u128))
                                                 .finish(super::expr::CompareOp::GreaterThan)
                                         })))
