@@ -724,6 +724,10 @@ impl<'ir, 'a> ExprBuilder<'ir, 'a> {
     pub fn compare<F: FnOnce(&mut CompareOpBuilder<'ir, '_>) -> CompareExpr<'ir>>(&mut self, f: F) -> Expr<'ir> {
         let expr = f(&mut CompareOpBuilder::new(self.pool, self.scope));
 
+        if self.ty.is_none() {
+            self.ty = Some(Type::uint(1)); //
+        }
+
         self.finish(ExprBody::CompareOp(expr))
     }
 
