@@ -1107,6 +1107,20 @@ pub struct Branch<'ir> {
     else_dest: JumpTarget<'ir>,
 }
 
+impl<'ir> Branch<'ir> {
+    pub fn condition(&self) -> &Expr<'ir> {
+        &self.cond
+    }
+
+    pub fn dest(&self) -> &JumpTarget<'ir> {
+        &self.dest
+    }
+
+    pub fn else_dest(&self) -> &JumpTarget<'ir> {
+        &self.else_dest
+    }
+}
+
 impl<'ir> PrettyPrint<'ir> for Branch<'ir> {
     fn fmt(&self, f: &mut super::pretty::PrettyPrinter<'_, '_, 'ir>) -> core::fmt::Result {
         self.cond.fmt(f)?;
